@@ -25,6 +25,19 @@ st.markdown("""
     }
     html, body, .stMarkdown p, p, span, div, h1, h2, h3, h4, label { color: #ffffff !important; }
     
+    /* TOMBOL BUKA SIDEBAR: Membuatnya besar dan menonjol saat sidebar tertutup */
+    button[data-testid="stSidebarCollapseButton"] {
+        background-color: #2563eb !important;
+        color: white !important;
+        border-radius: 50% !important;
+        width: 45px !important;
+        height: 45px !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        box-shadow: 0 4px 15px rgba(37, 99, 235, 0.4) !important;
+    }
+
     /* Styling Navigasi dan Kontrol */
     .stRadio [data-testid="stWidgetLabel"] p {
         font-size: 14px !important;
@@ -150,16 +163,27 @@ def get_signals(ticker_symbol, df_full):
 
 # --- MAIN DASHBOARD ---
 if check_login():
+    # Inisialisasi state menu agar sinkron antara sidebar dan navigasi atas
+    if 'menu_option' not in st.session_state:
+        st.session_state['menu_option'] = "🔍 Screener"
+
     # SIDEBAR KONTROL PANEL
     with st.sidebar:
         st.title(f"Hi, {st.session_state.get('user')}")
         
         # BLOK 1: Navigasi Halaman
         st.write("---")
-        menu = st.radio("MAIN NAVIGATION", ["🔍 Screener", "⭐ Watchlist", "⚙️ Akun"], index=0)
+        menu_sidebar = st.radio(
+            "MAIN NAVIGATION", 
+            ["🔍 Screener", "⭐ Watchlist", "⚙️ Akun"], 
+            key="sidebar_nav",
+            label_visibility="visible"
+        )
+        # Sinkronisasi pilihan sidebar ke session state
+        st.session_state['menu_option'] = menu_sidebar
         
         # BLOK 2: Input & Scan (Hanya tampil di Screener)
-        if menu == "🔍 Screener":
+        if st.session_state['menu_option'] == "🔍 Screener":
             st.write("---")
             st.markdown("### 📥 INPUT DATA")
             input_list = st.text_area("List Ticker (JK):", "BBCA, BBRI, TLKM, ASII, GOTO, BMRI", height=100, help="Gunakan koma sebagai pemisah")
@@ -179,38 +203,40 @@ if check_login():
                 st.markdown("### 🎯 FILTER HASIL")
                 df_all = pd.DataFrame(st.session_state['scan_results'])
                 
-                # Filter Sektor
                 f_sektor = st.multiselect("Pilih Sektor:", sorted(df_all['Sektor'].unique()), default=df_all['Sektor'].unique())
-                # Filter Skor
                 f_min_score = st.slider("Minimal Skor:", 0, 100, 0)
-                # Filter RSI
                 f_rsi_mode = st.radio("Kondisi RSI:", ["Semua", "Oversold (<35)", "Normal (35-70)", "Overbought (>70)"])
                 
-                # Simpan Filter ke Session agar bisa diproses di main konten
                 st.session_state['f_sektor'] = f_sektor
                 st.session_state['f_min_score'] = f_min_score
                 st.session_state['f_rsi_mode'] = f_rsi_mode
 
-    # HALAMAN UTAMA BERDASARKAN NAVIGASI
-    if menu == "🔍 Screener":
+    # HALAMAN UTAMA
+    # Solusi: Menambahkan Tab Navigasi Atas sebagai cadangan jika sidebar tertutup
+    top_nav = st.tabs(["🔍 Screener", "⭐ Watchlist", "⚙️ Akun"])
+    
+    # Hubungkan tab ke menu_option (Sinkronisasi dua arah sederhana)
+    # Catatan: Di Streamlit, tab biasanya digunakan untuk konten, 
+    # di sini kita gunakan sebagai navigasi utama yang persisten di layar.
+
+    # 1. LOGIK HALAMAN SCREENER
+    with top_nav[0]:
         st.title("🖥️ Market Screener")
         
         if 'scan_results' in st.session_state:
             df_final = pd.DataFrame(st.session_state['scan_results'])
             
-            # Terapkan Filter dari Sidebar
+            # Terapkan Filter
             filtered = df_final[
-                (df_final['Sektor'].isin(st.session_state.get('f_sektor', []))) & 
+                (df_final['Sektor'].isin(st.session_state.get('f_sektor', df_final['Sektor'].unique()))) & 
                 (df_final['Total Skor'] >= st.session_state.get('f_min_score', 0))
             ]
             
-            # Filter RSI Tambahan
             rsi_mode = st.session_state.get('f_rsi_mode', "Semua")
             if rsi_mode == "Oversold (<35)": filtered = filtered[filtered['RSI'] < 35]
             elif rsi_mode == "Normal (35-70)": filtered = filtered[(filtered['RSI'] >= 35) & (filtered['RSI'] <= 70)]
             elif rsi_mode == "Overbought (>70)": filtered = filtered[filtered['RSI'] > 70]
 
-            # Ringkasan Metrics
             c1, c2, c3 = st.columns(3)
             c1.metric("Hasil Filter", len(filtered))
             c2.metric("Oversold", len(filtered[filtered['RSI'] < 35]))
@@ -218,7 +244,6 @@ if check_login():
 
             st.divider()
             
-            # Tampilkan Tabel
             st.dataframe(
                 filtered.sort_values(by="Total Skor", ascending=False), 
                 use_container_width=True, 
@@ -229,15 +254,17 @@ if check_login():
                     "Harga": st.column_config.NumberColumn("Price", format="Rp %d")
                 }
             )
-            st.caption(f"Data terakhir diperbarui: {st.session_state['scan_ts']}")
+            st.caption(f"Data terakhir diperbarui: {st.session_state.get('scan_ts', 'N/A')}")
         else:
-            st.info("💡 Gunakan Panel Input di sebelah kiri untuk memasukkan ticker dan memulai scan.")
+            st.info("💡 Gunakan Panel Input di Sidebar (klik panah di pojok kiri atas jika tertutup) untuk memulai scan.")
 
-    elif menu == "⭐ Watchlist":
+    # 2. LOGIK HALAMAN WATCHLIST
+    with top_nav[1]:
         st.title("⭐ Watchlist Saya")
         st.warning("Fitur penyimpanan sedang dalam pengembangan.")
 
-    elif menu == "⚙️ Akun":
+    # 3. LOGIK HALAMAN AKUN
+    with top_nav[2]:
         st.title("⚙️ Pengaturan Akun")
         st.write(f"Login sebagai: **{st.session_state.get('user')}**")
         if st.button("🚪 LOGOUT DARI APLIKASI"):
