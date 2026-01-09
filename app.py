@@ -7,104 +7,42 @@ import sqlite3
 import json
 from datetime import datetime
 
-#--- KONFIGURASI LOGIN ---
-USER_CREDENTIALS = {
-    "admin": "saham123",
-    "user1": "puan123",
-    "husni_arif": "cuan2024",
-    "tedy_banka": "profit007"
-}
-# Konfigurasi Halaman
+# --- KONFIGURASI HALAMAN ---
 st.set_page_config(page_title="StockScreener Pro: Full Analysis", layout="wide")
 
-# CSS Kustom Tingkat Lanjut untuk Tema Gelap Total dan Kontras Tinggi
+# CSS Kustom untuk Tema Gelap Total dan Kontras Tinggi
 st.markdown("""
 <style>
-    /* Latar Belakang Utama */
-    .stApp { 
-        background-color: #0f172a !important; 
-    }
-    
-    /* Sidebar: Latar belakang gelap pekat */
+    .stApp { background-color: #0f172a !important; }
     [data-testid="stSidebar"] {
         background-color: #020617 !important;
         border-right: 1px solid #1e293b;
     }
-
-    /* Memaksa SEMUA teks menjadi putih murni */
     html, body, [data-testid="stAppViewContainer"], [data-testid="stSidebar"] .stMarkdown p, 
-    .stMarkdown, p, span, div, h1, h2, h3, h4, h5, h6, label, .stCaption, 
-    .st-emotion-cache-16q986z, .st-emotion-cache-eqffof, .st-emotion-cache-10trblm {
+    .stMarkdown, p, span, div, h1, h2, h3, h4, h5, h6, label, .stCaption {
         color: #ffffff !important;
     }
-
-    /* Styling Input Text dan TextArea */
     .stTextArea textarea, .stTextInput input {
         background-color: #1e293b !important;
         color: #ffffff !important;
         border: 1px solid #334155 !important;
     }
-
-    /* FIX TOTAL MULTISELECT DROPDOWN */
-    /* Target container utama select */
-    div[data-baseweb="select"] > div {
+    div[data-baseweb="select"] > div, [data-baseweb="popover"], [data-baseweb="menu"] {
         background-color: #1e293b !important;
         color: white !important;
     }
-    
-    /* Target Popover (menu melayang) */
-    [data-baseweb="popover"], [data-baseweb="menu"] {
-        background-color: #1e293b !important;
-        color: white !important;
-    }
-
-    /* Target item di dalam list */
     [data-baseweb="menu"] li, [role="option"] {
         background-color: #1e293b !important;
         color: white !important;
-        transition: background 0.2s;
     }
-
-    /* Hover pada item */
-    [data-baseweb="menu"] li:hover, [role="option"]:hover {
-        background-color: #3b82f6 !important;
-        color: white !important;
-    }
-
-    /* Target khusus untuk teks di dalam option agar tidak hitam */
-    [data-baseweb="menu"] div, [role="option"] div {
-        color: white !important;
-    }
-
-    /* Label yang sudah terpilih (Tags) */
-    span[data-baseweb="tag"] {
-        background-color: #2563eb !important;
-        color: white !important;
-    }
-    
-    span[data-baseweb="tag"] span {
-        color: white !important;
-    }
-
-    /* FIX TOMBOL */
+    [data-baseweb="menu"] li:hover { background-color: #3b82f6 !important; }
+    span[data-baseweb="tag"] { background-color: #2563eb !important; color: white !important; }
     .stButton > button {
         background-color: #2563eb !important;
         color: #ffffff !important;
-        border: 1px solid #3b82f6 !important;
-        font-weight: 600 !important;
         border-radius: 8px !important;
+        width: 100%;
     }
-    
-    .stButton > button:hover {
-        background-color: #1d4ed8 !important;
-        border-color: #2563eb !important;
-    }
-
-    .stMultiSelect div, .stSlider div { color: #ffffff !important; }
-    [data-testid="stMetricValue"] { color: #ffffff !important; font-weight: 800; }
-    [data-testid="stMetricLabel"] { color: #cbd5e1 !important; }
-    .stDataFrame { background-color: #1e293b; padding: 10px; border-radius: 8px; }
-    
     .detail-box {
         background-color: #1e293b;
         padding: 20px;
@@ -130,6 +68,7 @@ def save_to_db(results, timestamp):
     c = conn.cursor()
     c.execute("DELETE FROM scan_results")
     for res in results:
+        # Menghapus dataframe sebelum disimpan ke JSON
         clean_res = {k: v for k, v in res.items() if k != 'df'}
         c.execute("INSERT INTO scan_results (ticker, data, timestamp) VALUES (?, ?, ?)",
                   (res['Ticker'], json.dumps(clean_res), timestamp))
@@ -162,9 +101,14 @@ def detect_market_structure(df):
     window = 5
     df['High_Swing'] = df['High'].rolling(window=window, center=True).apply(lambda x: x.max() == x[window//2])
     df['Low_Swing'] = df['Low'].rolling(window=window, center=True).apply(lambda x: x.min() == x[window//2])
-    last_high = df[df['High_Swing'] == 1]['High'].iloc[-2] if len(df[df['High_Swing'] == 1]) > 1 else None
-    last_low = df[df['Low_Swing'] == 1]['Low'].iloc[-2] if len(df[df['Low_Swing'] == 1]) > 1 else None
+    
+    highs = df[df['High_Swing'] == 1]['High']
+    lows = df[df['Low_Swing'] == 1]['Low']
+    
+    last_high = highs.iloc[-2] if len(highs) > 1 else None
+    last_low = lows.iloc[-2] if len(lows) > 1 else None
     current_close = df['Close'].iloc[-1]
+    
     if last_high and current_close > last_high: return "BOS Bullish"
     elif last_low and current_close < last_low: return "BOS Bearish"
     return "Sideways"
@@ -172,6 +116,7 @@ def detect_market_structure(df):
 def find_order_blocks(df):
     obs = []
     for i in range(1, len(df)-2):
+        # Pola sederhana OB: Candle berlawanan sebelum pergerakan impulsif
         if df['Close'].iloc[i] < df['Open'].iloc[i]:
             if df['Close'].iloc[i+1] > df['Open'].iloc[i+1] and df['Close'].iloc[i+2] > df['Open'].iloc[i+2]:
                 if df['Close'].iloc[i+2] > df['High'].iloc[i]:
@@ -179,28 +124,23 @@ def find_order_blocks(df):
     return obs[-1] if obs else None
 
 def generate_dynamic_insight(data, ob):
-    """Menghasilkan narasi analisis berdasarkan data teknikal"""
     insights = []
-    
-    # Analisis Struktur
     if data['Structure'] == "BOS Bullish":
         insights.append("Struktur pasar mengonfirmasi tren naik (Break of Structure).")
     elif data['Structure'] == "BOS Bearish":
         insights.append("Hati-hati, terjadi penembusan struktur ke bawah (Bearish BOS).")
     
-    # Analisis Volume & OB
     if data['Vol Ratio'] > 2.0:
         insights.append(f"Volume melonjak {data['Vol Ratio']}x, indikasi kuat akumulasi Institusi.")
+    
     if ob:
         insights.append(f"Harga tertahan di area Demand ({ob['type']}) pada level Rp{round(ob['price'])}.")
     
-    # Analisis RSI
     if data['RSI'] < 35:
         insights.append("RSI menunjukkan kondisi Jenuh Jual (Oversold), potensi rebound tinggi.")
     elif data['RSI'] > 70:
         insights.append("RSI memasuki area Jenuh Beli (Overbought), waspada koreksi harga.")
     
-    # Kesimpulan Skor
     if data['Total Skor'] >= 75:
         insights.append("Konfluensi sinyal sangat kuat (Skor > 75). Probabilitas sukses trade tinggi.")
     
@@ -221,6 +161,7 @@ def get_signals(ticker_symbol):
         price = last['Close']
         vol_ratio = last['Volume'] / last['Avg_Vol_5'] if last['Avg_Vol_5'] > 0 else 0
         
+        # Scoring Logic
         vol_score = 45 if vol_ratio > 2.0 else (30 if vol_ratio > 1.5 else (10 if vol_ratio > 1.0 else 0))
         ma50_score = 30 if price > last['MA50'] else 0
         rsi_score = 25 if last['RSI'] < 35 else (15 if last['RSI'] < 65 else 5)
@@ -240,8 +181,6 @@ def get_signals(ticker_symbol):
             "df": df
         }
     except Exception as e:
-        if "RateLimitError" in str(type(e)):
-            st.error("Rate Limit Yahoo Finance aktif.")
         return None
 
 # --- UI LOGIC ---
@@ -263,10 +202,10 @@ with st.sidebar:
     default_t = "BBCA, BBRI, TLKM, ASII, GOTO, BMRI, UNTR, ADRO"
     input_tickers = st.text_area("Daftar Ticker:", default_t, height=100)
     
-    if st.button("Tarik Data & Analisis Baru", use_container_width=True):
+    if st.button("Tarik Data & Analisis Baru"):
         st.session_state['selected_ticker'] = None
         t_list = [t.strip().upper() + (".JK" if "." not in t else "") for t in input_tickers.split(",") if t.strip()]
-        with st.spinner("Menghubungi Server yFinance..."):
+        with st.spinner("Mengambil data yFinance..."):
             res = [get_signals(t) for t in t_list]
             valid_res = [r for r in res if r]
             st.session_state['raw_results'] = valid_res
@@ -290,25 +229,6 @@ with st.sidebar:
     else:
         filtered = pd.DataFrame()
 
-# --- AUTH & SESSION STATE ---
-if "logged_in" not in st.session_state: st.session_state["logged_in"] = False
-if "watchlist" not in st.session_state: st.session_state["watchlist"] = []
-if "results" not in st.session_state: st.session_state["results"] = []
-
-def login_screen():
-    st.markdown("<br><h1 style='text-align: center; color: #3b82f6;'>🚀 StockScreener Pro</h1>", unsafe_allow_html=True)
-    col1, col2, col3 = st.columns([1, 1.2, 1])
-    with col2:
-        with st.form("login"):
-            u = st.text_input("Username")
-            p = st.text_input("Password", type="password")
-            if st.form_submit_button("SIGN IN"):
-                if u in USER_CREDENTIALS and USER_CREDENTIALS[u] == p:
-                    st.session_state["logged_in"] = True
-                    st.session_state["user"] = u
-                    st.rerun()
-                else: st.error("Username atau password salah.")
-
 # --- MAIN DISPLAY ---
 
 if not filtered.empty:
@@ -326,6 +246,7 @@ if not filtered.empty:
     if 'df' in df_show.columns: df_show = df_show.drop(columns=['df'])
     df_show = df_show.drop(columns=['ma20_raw']).sort_values(by="Total Skor", ascending=False)
     
+    # Dataframe interaktif
     event = st.dataframe(
         df_show,
         use_container_width=True,
@@ -345,57 +266,56 @@ if not filtered.empty:
 
     if st.session_state['selected_ticker']:
         st.divider()
-        st.header(f"🔍 Detail: {st.session_state['selected_ticker']}")
+        st.header(f"🔍 Detail Analisis: {st.session_state['selected_ticker']}")
         
+        # Ambil data lengkap termasuk DataFrame histori
         ticker_data = next(i for i in st.session_state['raw_results'] if i["Ticker"] == st.session_state['selected_ticker'])
         df_chart = ticker_data.get('df')
         
         if df_chart is None:
-            with st.spinner("Memuat data historis..."):
-                try:
-                    ticker_obj = yf.Ticker(st.session_state['selected_ticker'])
-                    df_chart = ticker_obj.history(period="120d")
-                except: st.error("Gagal memuat chart.")
-            
+            ticker_obj = yf.Ticker(st.session_state['selected_ticker'])
+            df_chart = ticker_obj.history(period="120d")
+        
         if df_chart is not None and not df_chart.empty:
             df_chart['MA50'] = df_chart['Close'].rolling(window=50).mean()
             c_left, c_right = st.columns([2, 1])
+            
             with c_left:
-                fig = go.Figure(data=[go.Candlestick(x=df_chart.index, open=df_chart['Open'], high=df_chart['High'], low=df_chart['Low'], close=df_chart['Close'], name="Price")])
+                fig = go.Figure(data=[go.Candlestick(
+                    x=df_chart.index, open=df_chart['Open'], 
+                    high=df_chart['High'], low=df_chart['Low'], 
+                    close=df_chart['Close'], name="Price"
+                )])
                 fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['MA50'], line=dict(color='#fbbf24', width=2), name="MA50"))
+                
                 ob = find_order_blocks(df_chart)
-                if ob: fig.add_hline(y=ob['price'], line_dash="dash", line_color="#22d3ee", annotation_text="OB Zone")
+                if ob:
+                    fig.add_hline(y=ob['price'], line_dash="dash", line_color="#22d3ee", annotation_text="OB Zone")
                 
                 fig.update_layout(
                     template="plotly_dark", xaxis_rangeslider_visible=False, height=500,
                     margin=dict(l=0, r=0, t=20, b=0), paper_bgcolor='rgba(0,0,0,0)',
-                    plot_bgcolor='rgba(0,0,0,0)', font=dict(color="white"),
-                    xaxis=dict(tickfont=dict(color="#ffffff")),
-                    yaxis=dict(tickfont=dict(color="#ffffff"), gridcolor="#334155")
+                    plot_bgcolor='rgba(0,0,0,0)'
                 )
                 st.plotly_chart(fig, use_container_width=True)
             
             with c_right:
-                # Menghasilkan Insight Dinamis
                 dynamic_analysis = generate_dynamic_insight(ticker_data, ob)
-                
                 st.markdown(f"""
                 <div class="detail-box">
-                    <h4 style="color:#ffffff;">Price Action Detail</h4>
+                    <h4 style="margin-top:0;">Technical Summary</h4>
                     <p>Structure: <b style='color:#34d399;'>{ticker_data['Structure']}</b></p>
-                    <p>RSI: <b>{ticker_data['RSI']}</b></p>
-                    <p>Skor: <b>{ticker_data['Total Skor']}/100</b></p>
+                    <p>RSI (14): <b>{ticker_data['RSI']}</b></p>
+                    <p>Analyst Score: <b>{ticker_data['Total Skor']}/100</b></p>
                     <hr style="border-color:#475569;">
-                    <p style="color:#e2e8f0; font-weight: 600;">Analisis Insight:</p>
-                    <p style="color:#ffffff; font-size: 14px; line-height: 1.6;">{dynamic_analysis}</p>
+                    <p style="color:#e2e8f0; font-weight: 600;">AI Insight:</p>
+                    <p style="font-size: 14px; line-height: 1.6;">{dynamic_analysis}</p>
                 </div>
                 """, unsafe_allow_html=True)
-                st.write("**RSI Momentum**")
+                st.write("**Momentum Bar**")
                 st.progress(min(max(ticker_data['RSI']/100, 0.0), 1.0))
 else:
     if st.session_state['raw_results']:
-        st.warning("Tidak ada saham yang sesuai dengan filter.")
+        st.warning("Tidak ada data yang cocok dengan filter.")
     else:
-        st.info("💡 Klik 'Tarik Data & Analisis Baru' untuk memulai.")
-
-
+        st.info("💡 Masukkan ticker di sidebar dan klik 'Tarik Data' untuk memulai analisis.")
