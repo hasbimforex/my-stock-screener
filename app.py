@@ -10,6 +10,7 @@ from datetime import datetime
 USER_CREDENTIALS = {
     "admin": "saham123",
     "user1": "puan123"
+    "husni": "paulan321"
 }
 
 # --- KONFIGURASI HALAMAN ---
@@ -246,3 +247,4 @@ if check_login():
         if st.button("🚪 LOGOUT"):
             st.session_state["logged_in"] = False
             st.rerun()
+
