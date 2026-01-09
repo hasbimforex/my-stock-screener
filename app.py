@@ -7,7 +7,7 @@ import sqlite3
 import json
 from datetime import datetime
 
- --- KONFIGURASI LOGIN ---
+#--- KONFIGURASI LOGIN ---
 USER_CREDENTIALS = {
     "admin": "saham123",
     "user1": "puan123",
@@ -397,4 +397,5 @@ else:
         st.warning("Tidak ada saham yang sesuai dengan filter.")
     else:
         st.info("💡 Klik 'Tarik Data & Analisis Baru' untuk memulai.")
+
 
