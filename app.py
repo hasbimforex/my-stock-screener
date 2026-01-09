@@ -7,38 +7,70 @@ import requests
 from datetime import datetime
 
 # --- KONFIGURASI LOGIN STATIS ---
-# Anda bisa menambah atau mengubah username & password di sini
 USER_CREDENTIALS = {
     "admin": "saham123",
     "user1": "puan123"
 }
 
 # --- KONFIGURASI HALAMAN ---
-st.set_page_config(page_title="StockScreener Pro: Static Auth", layout="wide")
+st.set_page_config(page_title="StockScreener Pro: Kontrol Panel", layout="wide")
 
 # CSS Kustom untuk Tema Gelap dan Kontras Tinggi
 st.markdown("""
 <style>
     .stApp { background-color: #0f172a !important; }
-    [data-testid="stSidebar"] { background-color: #020617 !important; border-right: 1px solid #1e293b; }
+    [data-testid="stSidebar"] { 
+        background-color: #020617 !important; 
+        border-right: 1px solid #1e293b; 
+    }
     html, body, .stMarkdown p, p, span, div, h1, h2, h3, h4, label { color: #ffffff !important; }
+    
+    /* Styling Navigasi dan Kontrol */
+    .stRadio [data-testid="stWidgetLabel"] p {
+        font-size: 14px !important;
+        font-weight: 700 !important;
+        color: #94a3b8 !important;
+        text-transform: uppercase;
+        margin-bottom: 10px;
+    }
+    
+    /* Tombol Utama */
     .stButton > button { 
         background-color: #2563eb !important; 
         color: #ffffff !important; 
         border-radius: 8px !important;
         font-weight: 600 !important;
         width: 100%;
+        border: none;
+        padding: 10px;
     }
-    .stTextInput input {
+    
+    .stButton > button:hover {
+        background-color: #1d4ed8 !important;
+        border: 1px solid #3b82f6 !important;
+    }
+
+    /* Input & Textarea */
+    .stTextArea textarea, .stTextInput input {
         background-color: #1e293b !important;
         color: white !important;
         border: 1px solid #334155 !important;
     }
+    
+    /* Fix untuk Dropdown Multiselect agar tidak putih */
+    div[data-baseweb="select"] > div {
+        background-color: #1e293b !important;
+        color: white !important;
+    }
+
     .stDataFrame { background-color: #1e293b; border-radius: 8px; }
+    
+    /* Garis Pemisah Sidebar */
+    hr { border-top: 1px solid #1e293b !important; margin: 20px 0 !important; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- OPTIMASI YFINANCE SESSION (Anti-Rate Limit) ---
+# --- OPTIMASI YFINANCE SESSION ---
 session = requests.Session()
 session.headers.update({
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -51,22 +83,18 @@ def check_login():
 
     if not st.session_state["logged_in"]:
         st.markdown("<h1 style='text-align: center;'>🔐 StockScreener Pro</h1>", unsafe_allow_html=True)
-        st.markdown("<p style='text-align: center; color: #94a3b8;'>Silakan login untuk mengakses analisis pasar</p>", unsafe_allow_html=True)
-        
         col1, col2, col3 = st.columns([1, 1.5, 1])
         with col2:
             with st.form("login_form"):
                 u = st.text_input("Username")
                 p = st.text_input("Password", type="password")
                 submit = st.form_submit_button("Masuk")
-                
                 if submit:
                     if u in USER_CREDENTIALS and USER_CREDENTIALS[u] == p:
                         st.session_state["logged_in"] = True
                         st.session_state["user"] = u
                         st.rerun()
-                    else:
-                        st.error("Username atau password salah!")
+                    else: st.error("Akses ditolak.")
         return False
     return True
 
@@ -95,11 +123,10 @@ def get_signals(ticker_symbol, df_full):
     try:
         if isinstance(df_full.columns, pd.MultiIndex):
             df = df_full.xs(ticker_symbol, axis=1, level=1).dropna()
-        else:
-            df = df_full.dropna()
-
+        else: df = df_full.dropna()
         if df.empty or len(df) < 50: return None
         
+        info = yf.Ticker(ticker_symbol, session=session).info
         last = df.iloc[-1]
         price = last['Close']
         avg_vol = df['Volume'].shift(1).rolling(window=5).mean().iloc[-1]
@@ -109,6 +136,7 @@ def get_signals(ticker_symbol, df_full):
         
         return {
             "Ticker": str(ticker_symbol),
+            "Sektor": str(info.get('sector', 'Lainnya')),
             "Harga": int(round(price)),
             "Chg %": float(round(((price - df.iloc[-2]['Close']) / df.iloc[-2]['Close']) * 100, 2)),
             "Total Skor": int((45 if vol_ratio > 2 else 10) + (30 if price > ma50 else 0) + (25 if rsi < 35 else 5)),
@@ -122,54 +150,96 @@ def get_signals(ticker_symbol, df_full):
 
 # --- MAIN DASHBOARD ---
 if check_login():
-    # Sidebar
+    # SIDEBAR KONTROL PANEL
     with st.sidebar:
-        st.title(f"👤 {st.session_state.get('user')}")
-        st.divider()
-        input_list = st.text_area("Ticker (JK):", "BBCA, BBRI, TLKM, ASII, GOTO, BMRI", height=100)
+        st.title(f"Hi, {st.session_state.get('user')}")
         
-        if st.button("🚀 Jalankan Scan"):
-            tickers = [t.strip().upper() + (".JK" if "." not in t else "") for t in input_list.split(",") if t.strip()]
-            with st.spinner("Mengambil data pasar..."):
-                try:
-                    # Download masal untuk menghindari rate limit
-                    df_all_data = yf.download(tickers, period="120d", session=session, group_by='ticker')
-                    results = [get_signals(t, df_all_data) for t in tickers]
-                    st.session_state['scan_results'] = [r for r in results if r]
-                    st.session_state['scan_ts'] = datetime.now().strftime("%Y-%m-%d %H:%M")
-                except Exception as e:
-                    st.error(f"Error penarikan data: {e}")
+        # BLOK 1: Navigasi Halaman
+        st.write("---")
+        menu = st.radio("MAIN NAVIGATION", ["🔍 Screener", "⭐ Watchlist", "⚙️ Akun"], index=0)
+        
+        # BLOK 2: Input & Scan (Hanya tampil di Screener)
+        if menu == "🔍 Screener":
+            st.write("---")
+            st.markdown("### 📥 INPUT DATA")
+            input_list = st.text_area("List Ticker (JK):", "BBCA, BBRI, TLKM, ASII, GOTO, BMRI", height=100, help="Gunakan koma sebagai pemisah")
+            if st.button("🚀 MULAI ANALISIS"):
+                tickers = [t.strip().upper() + (".JK" if "." not in t else "") for t in input_list.split(",") if t.strip()]
+                with st.spinner("Menganalisis..."):
+                    try:
+                        df_all_data = yf.download(tickers, period="120d", session=session, group_by='ticker')
+                        results = [get_signals(t, df_all_data) for t in tickers]
+                        st.session_state['scan_results'] = [r for r in results if r]
+                        st.session_state['scan_ts'] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                    except: st.error("Gagal menarik data.")
 
-        st.divider()
-        if st.button("🚪 Keluar (Logout)"):
+            # BLOK 3: Filter Data (Hanya tampil jika ada hasil scan)
+            if 'scan_results' in st.session_state:
+                st.write("---")
+                st.markdown("### 🎯 FILTER HASIL")
+                df_all = pd.DataFrame(st.session_state['scan_results'])
+                
+                # Filter Sektor
+                f_sektor = st.multiselect("Pilih Sektor:", sorted(df_all['Sektor'].unique()), default=df_all['Sektor'].unique())
+                # Filter Skor
+                f_min_score = st.slider("Minimal Skor:", 0, 100, 0)
+                # Filter RSI
+                f_rsi_mode = st.radio("Kondisi RSI:", ["Semua", "Oversold (<35)", "Normal (35-70)", "Overbought (>70)"])
+                
+                # Simpan Filter ke Session agar bisa diproses di main konten
+                st.session_state['f_sektor'] = f_sektor
+                st.session_state['f_min_score'] = f_min_score
+                st.session_state['f_rsi_mode'] = f_rsi_mode
+
+    # HALAMAN UTAMA BERDASARKAN NAVIGASI
+    if menu == "🔍 Screener":
+        st.title("🖥️ Market Screener")
+        
+        if 'scan_results' in st.session_state:
+            df_final = pd.DataFrame(st.session_state['scan_results'])
+            
+            # Terapkan Filter dari Sidebar
+            filtered = df_final[
+                (df_final['Sektor'].isin(st.session_state.get('f_sektor', []))) & 
+                (df_final['Total Skor'] >= st.session_state.get('f_min_score', 0))
+            ]
+            
+            # Filter RSI Tambahan
+            rsi_mode = st.session_state.get('f_rsi_mode', "Semua")
+            if rsi_mode == "Oversold (<35)": filtered = filtered[filtered['RSI'] < 35]
+            elif rsi_mode == "Normal (35-70)": filtered = filtered[(filtered['RSI'] >= 35) & (filtered['RSI'] <= 70)]
+            elif rsi_mode == "Overbought (>70)": filtered = filtered[filtered['RSI'] > 70]
+
+            # Ringkasan Metrics
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Hasil Filter", len(filtered))
+            c2.metric("Oversold", len(filtered[filtered['RSI'] < 35]))
+            c3.metric("Bullish Structure", len(filtered[filtered['Structure'] == 'BOS Bullish']))
+
+            st.divider()
+            
+            # Tampilkan Tabel
+            st.dataframe(
+                filtered.sort_values(by="Total Skor", ascending=False), 
+                use_container_width=True, 
+                hide_index=True,
+                column_config={
+                    "Total Skor": st.column_config.ProgressColumn("Skor Kekuatan", min_value=0, max_value=100),
+                    "Chg %": st.column_config.NumberColumn("Change", format="%.2f%%"),
+                    "Harga": st.column_config.NumberColumn("Price", format="Rp %d")
+                }
+            )
+            st.caption(f"Data terakhir diperbarui: {st.session_state['scan_ts']}")
+        else:
+            st.info("💡 Gunakan Panel Input di sebelah kiri untuk memasukkan ticker dan memulai scan.")
+
+    elif menu == "⭐ Watchlist":
+        st.title("⭐ Watchlist Saya")
+        st.warning("Fitur penyimpanan sedang dalam pengembangan.")
+
+    elif menu == "⚙️ Akun":
+        st.title("⚙️ Pengaturan Akun")
+        st.write(f"Login sebagai: **{st.session_state.get('user')}**")
+        if st.button("🚪 LOGOUT DARI APLIKASI"):
             st.session_state["logged_in"] = False
             st.rerun()
-
-    # Konten Utama
-    st.title("🖥️ Dashboard Analisis Saham")
-    
-    if 'scan_results' in st.session_state:
-        st.caption(f"Update terakhir: {st.session_state['scan_ts']}")
-        df_final = pd.DataFrame(st.session_state['scan_results'])
-        
-        # Dashboard Overview Metrics
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Total Saham", len(df_final))
-        m2.metric("Oversold (RSI < 35)", len(df_final[df_final['RSI'] < 35]))
-        m3.metric("Bullish Struktur", len(df_final[df_final['Structure'] == 'BOS Bullish']))
-
-        st.divider()
-        
-        # Tabel Interaktif
-        st.dataframe(
-            df_final.sort_values(by="Total Skor", ascending=False), 
-            use_container_width=True, 
-            hide_index=True,
-            column_config={
-                "Total Skor": st.column_config.ProgressColumn("Skor", min_value=0, max_value=100)
-            }
-        )
-        
-        st.info("💡 Klik baris di atas (fitur select) akan tersedia di update berikutnya.")
-    else:
-        st.info("💡 Selamat datang! Masukkan ticker di sidebar lalu klik 'Jalankan Scan' untuk melihat hasil.")
