@@ -17,14 +17,23 @@ def init_firebase():
     if not firebase_admin._apps:
         try:
             if "firebase_service_account" in st.secrets:
+                # Create a mutable copy of the credentials from secrets
                 fb_creds = dict(st.secrets["firebase_service_account"])
+                
+                # Fix common private_key formatting issues in Streamlit Secrets
                 if "private_key" in fb_creds:
-                    fb_creds["private_key"] = fb_creds["private_key"].replace("\\n", "\n")
+                    # Replace literal backslash-n with actual newlines
+                    # and ensure there are no trailing/leading whitespaces
+                    fb_creds["private_key"] = fb_creds["private_key"].replace("\\n", "\n").strip()
+                
                 cred = credentials.Certificate(fb_creds)
                 firebase_admin.initialize_app(cred)
                 return firestore.client()
+            else:
+                st.error("Konfigurasi 'firebase_service_account' tidak ditemukan di Streamlit Secrets.")
         except Exception as e:
             st.error(f"Gagal inisialisasi Firebase: {e}")
+            st.info("Pastikan 'private_key' di Secrets diawali dengan '-----BEGIN PRIVATE KEY-----' dan diakhiri dengan '-----END PRIVATE KEY-----' lengkap dengan semua karakter \\n.")
     else:
         return firestore.client()
     return None
