@@ -7,6 +7,13 @@ import sqlite3
 import json
 from datetime import datetime
 
+ --- KONFIGURASI LOGIN ---
+USER_CREDENTIALS = {
+    "admin": "saham123",
+    "user1": "puan123",
+    "husni_arif": "cuan2024",
+    "tedy_banka": "profit007"
+}
 # Konfigurasi Halaman
 st.set_page_config(page_title="StockScreener Pro: Full Analysis", layout="wide")
 
@@ -283,6 +290,25 @@ with st.sidebar:
     else:
         filtered = pd.DataFrame()
 
+# --- AUTH & SESSION STATE ---
+if "logged_in" not in st.session_state: st.session_state["logged_in"] = False
+if "watchlist" not in st.session_state: st.session_state["watchlist"] = []
+if "results" not in st.session_state: st.session_state["results"] = []
+
+def login_screen():
+    st.markdown("<br><h1 style='text-align: center; color: #3b82f6;'>🚀 StockScreener Pro</h1>", unsafe_allow_html=True)
+    col1, col2, col3 = st.columns([1, 1.2, 1])
+    with col2:
+        with st.form("login"):
+            u = st.text_input("Username")
+            p = st.text_input("Password", type="password")
+            if st.form_submit_button("SIGN IN"):
+                if u in USER_CREDENTIALS and USER_CREDENTIALS[u] == p:
+                    st.session_state["logged_in"] = True
+                    st.session_state["user"] = u
+                    st.rerun()
+                else: st.error("Username atau password salah.")
+
 # --- MAIN DISPLAY ---
 
 if not filtered.empty:
@@ -371,3 +397,4 @@ else:
         st.warning("Tidak ada saham yang sesuai dengan filter.")
     else:
         st.info("💡 Klik 'Tarik Data & Analisis Baru' untuk memulai.")
+
