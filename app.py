@@ -3,270 +3,371 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-import requests
+import sqlite3
+import json
 from datetime import datetime
 
-# --- KONFIGURASI LOGIN STATIS ---
-USER_CREDENTIALS = {
-    "admin": "saham123",
-    "user1": "puan123"
-}
+# Konfigurasi Halaman
+st.set_page_config(page_title="StockScreener Pro: Full Analysis", layout="wide")
 
-# --- KONFIGURASI HALAMAN ---
-st.set_page_config(page_title="StockScreener Pro: Kontrol Panel", layout="wide")
-
-# CSS Kustom untuk Tema Gelap dan Kontras Tinggi
+# CSS Kustom Tingkat Lanjut untuk Tema Gelap Total dan Kontras Tinggi
 st.markdown("""
 <style>
-    .stApp { background-color: #0f172a !important; }
-    [data-testid="stSidebar"] { 
-        background-color: #020617 !important; 
-        border-right: 1px solid #1e293b; 
+    /* Latar Belakang Utama */
+    .stApp { 
+        background-color: #0f172a !important; 
     }
-    html, body, .stMarkdown p, p, span, div, h1, h2, h3, h4, label { color: #ffffff !important; }
     
-    /* TOMBOL BUKA SIDEBAR: Membuatnya besar dan menonjol saat sidebar tertutup */
-    button[data-testid="stSidebarCollapseButton"] {
-        background-color: #2563eb !important;
-        color: white !important;
-        border-radius: 50% !important;
-        width: 45px !important;
-        height: 45px !important;
-        display: flex !important;
-        align-items: center !important;
-        justify-content: center !important;
-        box-shadow: 0 4px 15px rgba(37, 99, 235, 0.4) !important;
+    /* Sidebar: Latar belakang gelap pekat */
+    [data-testid="stSidebar"] {
+        background-color: #020617 !important;
+        border-right: 1px solid #1e293b;
     }
 
-    /* Styling Navigasi dan Kontrol */
-    .stRadio [data-testid="stWidgetLabel"] p {
-        font-size: 14px !important;
-        font-weight: 700 !important;
-        color: #94a3b8 !important;
-        text-transform: uppercase;
-        margin-bottom: 10px;
-    }
-    
-    /* Tombol Utama */
-    .stButton > button { 
-        background-color: #2563eb !important; 
-        color: #ffffff !important; 
-        border-radius: 8px !important;
-        font-weight: 600 !important;
-        width: 100%;
-        border: none;
-        padding: 10px;
-    }
-    
-    .stButton > button:hover {
-        background-color: #1d4ed8 !important;
-        border: 1px solid #3b82f6 !important;
+    /* Memaksa SEMUA teks menjadi putih murni */
+    html, body, [data-testid="stAppViewContainer"], [data-testid="stSidebar"] .stMarkdown p, 
+    .stMarkdown, p, span, div, h1, h2, h3, h4, h5, h6, label, .stCaption, 
+    .st-emotion-cache-16q986z, .st-emotion-cache-eqffof, .st-emotion-cache-10trblm {
+        color: #ffffff !important;
     }
 
-    /* Input & Textarea */
+    /* Styling Input Text dan TextArea */
     .stTextArea textarea, .stTextInput input {
         background-color: #1e293b !important;
-        color: white !important;
+        color: #ffffff !important;
         border: 1px solid #334155 !important;
     }
-    
-    /* Fix untuk Dropdown Multiselect agar tidak putih */
+
+    /* FIX TOTAL MULTISELECT DROPDOWN */
+    /* Target container utama select */
     div[data-baseweb="select"] > div {
         background-color: #1e293b !important;
         color: white !important;
     }
-
-    .stDataFrame { background-color: #1e293b; border-radius: 8px; }
     
-    /* Garis Pemisah Sidebar */
-    hr { border-top: 1px solid #1e293b !important; margin: 20px 0 !important; }
+    /* Target Popover (menu melayang) */
+    [data-baseweb="popover"], [data-baseweb="menu"] {
+        background-color: #1e293b !important;
+        color: white !important;
+    }
+
+    /* Target item di dalam list */
+    [data-baseweb="menu"] li, [role="option"] {
+        background-color: #1e293b !important;
+        color: white !important;
+        transition: background 0.2s;
+    }
+
+    /* Hover pada item */
+    [data-baseweb="menu"] li:hover, [role="option"]:hover {
+        background-color: #3b82f6 !important;
+        color: white !important;
+    }
+
+    /* Target khusus untuk teks di dalam option agar tidak hitam */
+    [data-baseweb="menu"] div, [role="option"] div {
+        color: white !important;
+    }
+
+    /* Label yang sudah terpilih (Tags) */
+    span[data-baseweb="tag"] {
+        background-color: #2563eb !important;
+        color: white !important;
+    }
+    
+    span[data-baseweb="tag"] span {
+        color: white !important;
+    }
+
+    /* FIX TOMBOL */
+    .stButton > button {
+        background-color: #2563eb !important;
+        color: #ffffff !important;
+        border: 1px solid #3b82f6 !important;
+        font-weight: 600 !important;
+        border-radius: 8px !important;
+    }
+    
+    .stButton > button:hover {
+        background-color: #1d4ed8 !important;
+        border-color: #2563eb !important;
+    }
+
+    .stMultiSelect div, .stSlider div { color: #ffffff !important; }
+    [data-testid="stMetricValue"] { color: #ffffff !important; font-weight: 800; }
+    [data-testid="stMetricLabel"] { color: #cbd5e1 !important; }
+    .stDataFrame { background-color: #1e293b; padding: 10px; border-radius: 8px; }
+    
+    .detail-box {
+        background-color: #1e293b;
+        padding: 20px;
+        border-radius: 12px;
+        border: 1px solid #475569;
+        margin-bottom: 20px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# --- OPTIMASI YFINANCE SESSION ---
-session = requests.Session()
-session.headers.update({
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-})
+# --- FUNGSI DATABASE LOKAL ---
 
-# --- FUNGSI AUTH ---
-def check_login():
-    if "logged_in" not in st.session_state:
-        st.session_state["logged_in"] = False
+def init_db():
+    conn = sqlite3.connect('stock_cache.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS scan_results 
+                 (id INTEGER PRIMARY KEY, ticker TEXT, data TEXT, timestamp TEXT)''')
+    conn.commit()
+    conn.close()
 
-    if not st.session_state["logged_in"]:
-        st.markdown("<h1 style='text-align: center;'>🔐 StockScreener Pro</h1>", unsafe_allow_html=True)
-        col1, col2, col3 = st.columns([1, 1.5, 1])
-        with col2:
-            with st.form("login_form"):
-                u = st.text_input("Username")
-                p = st.text_input("Password", type="password")
-                submit = st.form_submit_button("Masuk")
-                if submit:
-                    if u in USER_CREDENTIALS and USER_CREDENTIALS[u] == p:
-                        st.session_state["logged_in"] = True
-                        st.session_state["user"] = u
-                        st.rerun()
-                    else: st.error("Akses ditolak.")
-        return False
-    return True
+def save_to_db(results, timestamp):
+    conn = sqlite3.connect('stock_cache.db')
+    c = conn.cursor()
+    c.execute("DELETE FROM scan_results")
+    for res in results:
+        clean_res = {k: v for k, v in res.items() if k != 'df'}
+        c.execute("INSERT INTO scan_results (ticker, data, timestamp) VALUES (?, ?, ?)",
+                  (res['Ticker'], json.dumps(clean_res), timestamp))
+    conn.commit()
+    conn.close()
+
+def load_from_db():
+    try:
+        conn = sqlite3.connect('stock_cache.db')
+        df_sql = pd.read_sql_query("SELECT * FROM scan_results", conn)
+        conn.close()
+        if df_sql.empty: return [], None
+        results = [json.loads(row['data']) for _, row in df_sql.iterrows()]
+        last_updated = df_sql['timestamp'].iloc[0]
+        return results, last_updated
+    except: return [], None
 
 # --- ANALISIS TEKNIKAL ---
+
 def calculate_rsi(data, window=14):
     delta = data.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
     rs = gain / loss.replace(0, np.nan)
-    return (100 - (100 / (1 + rs))).fillna(50)
+    rsi = 100 - (100 / (1 + rs))
+    return rsi.fillna(50)
 
 def detect_market_structure(df):
-    try:
-        window = 5
-        df['High_Swing'] = df['High'].rolling(window=window, center=True).apply(lambda x: x.max() == x[window//2])
-        df['Low_Swing'] = df['Low'].rolling(window=window, center=True).apply(lambda x: x.min() == x[window//2])
-        last_high = df[df['High_Swing'] == 1]['High'].iloc[-2] if len(df[df['High_Swing'] == 1]) > 1 else None
-        last_low = df[df['Low_Swing'] == 1]['Low'].iloc[-2] if len(df[df['Low_Swing'] == 1]) > 1 else None
-        current_close = df['Close'].iloc[-1]
-        if last_high and current_close > last_high: return "BOS Bullish"
-        if last_low and current_close < last_low: return "BOS Bearish"
-    except: pass
+    df = df.copy()
+    window = 5
+    df['High_Swing'] = df['High'].rolling(window=window, center=True).apply(lambda x: x.max() == x[window//2])
+    df['Low_Swing'] = df['Low'].rolling(window=window, center=True).apply(lambda x: x.min() == x[window//2])
+    last_high = df[df['High_Swing'] == 1]['High'].iloc[-2] if len(df[df['High_Swing'] == 1]) > 1 else None
+    last_low = df[df['Low_Swing'] == 1]['Low'].iloc[-2] if len(df[df['Low_Swing'] == 1]) > 1 else None
+    current_close = df['Close'].iloc[-1]
+    if last_high and current_close > last_high: return "BOS Bullish"
+    elif last_low and current_close < last_low: return "BOS Bearish"
     return "Sideways"
 
-def get_signals(ticker_symbol, df_full):
+def find_order_blocks(df):
+    obs = []
+    for i in range(1, len(df)-2):
+        if df['Close'].iloc[i] < df['Open'].iloc[i]:
+            if df['Close'].iloc[i+1] > df['Open'].iloc[i+1] and df['Close'].iloc[i+2] > df['Open'].iloc[i+2]:
+                if df['Close'].iloc[i+2] > df['High'].iloc[i]:
+                    obs.append({'type': 'Bullish OB', 'price': df['Low'].iloc[i]})
+    return obs[-1] if obs else None
+
+def generate_dynamic_insight(data, ob):
+    """Menghasilkan narasi analisis berdasarkan data teknikal"""
+    insights = []
+    
+    # Analisis Struktur
+    if data['Structure'] == "BOS Bullish":
+        insights.append("Struktur pasar mengonfirmasi tren naik (Break of Structure).")
+    elif data['Structure'] == "BOS Bearish":
+        insights.append("Hati-hati, terjadi penembusan struktur ke bawah (Bearish BOS).")
+    
+    # Analisis Volume & OB
+    if data['Vol Ratio'] > 2.0:
+        insights.append(f"Volume melonjak {data['Vol Ratio']}x, indikasi kuat akumulasi Institusi.")
+    if ob:
+        insights.append(f"Harga tertahan di area Demand ({ob['type']}) pada level Rp{round(ob['price'])}.")
+    
+    # Analisis RSI
+    if data['RSI'] < 35:
+        insights.append("RSI menunjukkan kondisi Jenuh Jual (Oversold), potensi rebound tinggi.")
+    elif data['RSI'] > 70:
+        insights.append("RSI memasuki area Jenuh Beli (Overbought), waspada koreksi harga.")
+    
+    # Kesimpulan Skor
+    if data['Total Skor'] >= 75:
+        insights.append("Konfluensi sinyal sangat kuat (Skor > 75). Probabilitas sukses trade tinggi.")
+    
+    return " ".join(insights) if insights else "Kondisi pasar saat ini sedang konsolidasi tanpa sinyal dominan."
+
+def get_signals(ticker_symbol):
     try:
-        if isinstance(df_full.columns, pd.MultiIndex):
-            df = df_full.xs(ticker_symbol, axis=1, level=1).dropna()
-        else: df = df_full.dropna()
+        ticker = yf.Ticker(ticker_symbol)
+        df = ticker.history(period="120d")
         if df.empty or len(df) < 50: return None
+
+        df['MA20'] = df['Close'].rolling(window=20).mean()
+        df['MA50'] = df['Close'].rolling(window=50).mean()
+        df['RSI'] = calculate_rsi(df['Close'], 14)
+        df['Avg_Vol_5'] = df['Volume'].shift(1).rolling(window=5).mean()
         
-        info = yf.Ticker(ticker_symbol, session=session).info
         last = df.iloc[-1]
         price = last['Close']
-        avg_vol = df['Volume'].shift(1).rolling(window=5).mean().iloc[-1]
-        vol_ratio = last['Volume'] / avg_vol if avg_vol > 0 else 0
-        rsi = calculate_rsi(df['Close'], 14).iloc[-1]
-        ma50 = df['Close'].rolling(window=50).mean().iloc[-1]
+        vol_ratio = last['Volume'] / last['Avg_Vol_5'] if last['Avg_Vol_5'] > 0 else 0
+        
+        vol_score = 45 if vol_ratio > 2.0 else (30 if vol_ratio > 1.5 else (10 if vol_ratio > 1.0 else 0))
+        ma50_score = 30 if price > last['MA50'] else 0
+        rsi_score = 25 if last['RSI'] < 35 else (15 if last['RSI'] < 65 else 5)
         
         return {
             "Ticker": str(ticker_symbol),
-            "Sektor": str(info.get('sector', 'Lainnya')),
+            "Sektor": str(ticker.info.get('sector', 'Lainnya')),
             "Harga": int(round(price)),
             "Chg %": float(round(((price - df.iloc[-2]['Close']) / df.iloc[-2]['Close']) * 100, 2)),
-            "Total Skor": int((45 if vol_ratio > 2 else 10) + (30 if price > ma50 else 0) + (25 if rsi < 35 else 5)),
+            "Total Skor": int(vol_score + ma50_score + rsi_score),
             "Vol Ratio": float(round(vol_ratio, 2)),
-            "RSI": float(round(rsi, 1)),
+            "RSI": float(round(last['RSI'], 1)),
             "Structure": str(detect_market_structure(df)),
-            "MA20": "✅ Bullish" if price > df['Close'].rolling(window=20).mean().iloc[-1] else "❌ Bearish",
-            "MA50": "⬆️ Above" if price > ma50 else "⬇️ Below"
+            "MA20": "✅ Bullish" if price > last['MA20'] else "❌ Bearish",
+            "MA50": "⬆️ Above" if price > last['MA50'] else "⬇️ Below",
+            "ma20_raw": bool(price > last['MA20']),
+            "df": df
         }
-    except: return None
+    except Exception as e:
+        if "RateLimitError" in str(type(e)):
+            st.error("Rate Limit Yahoo Finance aktif.")
+        return None
 
-# --- MAIN DASHBOARD ---
-if check_login():
-    # Inisialisasi state menu agar sinkron antara sidebar dan navigasi atas
-    if 'menu_option' not in st.session_state:
-        st.session_state['menu_option'] = "🔍 Screener"
+# --- UI LOGIC ---
 
-    # SIDEBAR KONTROL PANEL
-    with st.sidebar:
-        st.title(f"Hi, {st.session_state.get('user')}")
-        
-        # BLOK 1: Navigasi Halaman
-        st.write("---")
-        menu_sidebar = st.radio(
-            "MAIN NAVIGATION", 
-            ["🔍 Screener", "⭐ Watchlist", "⚙️ Akun"], 
-            key="sidebar_nav",
-            label_visibility="visible"
-        )
-        # Sinkronisasi pilihan sidebar ke session state
-        st.session_state['menu_option'] = menu_sidebar
-        
-        # BLOK 2: Input & Scan (Hanya tampil di Screener)
-        if st.session_state['menu_option'] == "🔍 Screener":
-            st.write("---")
-            st.markdown("### 📥 INPUT DATA")
-            input_list = st.text_area("List Ticker (JK):", "BBCA, BBRI, TLKM, ASII, GOTO, BMRI", height=100, help="Gunakan koma sebagai pemisah")
-            if st.button("🚀 MULAI ANALISIS"):
-                tickers = [t.strip().upper() + (".JK" if "." not in t else "") for t in input_list.split(",") if t.strip()]
-                with st.spinner("Menganalisis..."):
-                    try:
-                        df_all_data = yf.download(tickers, period="120d", session=session, group_by='ticker')
-                        results = [get_signals(t, df_all_data) for t in tickers]
-                        st.session_state['scan_results'] = [r for r in results if r]
-                        st.session_state['scan_ts'] = datetime.now().strftime("%Y-%m-%d %H:%M")
-                    except: st.error("Gagal menarik data.")
+init_db()
+st.title("🖥️ StockScreener Pro: Full Market Analysis")
 
-            # BLOK 3: Filter Data (Hanya tampil jika ada hasil scan)
-            if 'scan_results' in st.session_state:
-                st.write("---")
-                st.markdown("### 🎯 FILTER HASIL")
-                df_all = pd.DataFrame(st.session_state['scan_results'])
-                
-                f_sektor = st.multiselect("Pilih Sektor:", sorted(df_all['Sektor'].unique()), default=df_all['Sektor'].unique())
-                f_min_score = st.slider("Minimal Skor:", 0, 100, 0)
-                f_rsi_mode = st.radio("Kondisi RSI:", ["Semua", "Oversold (<35)", "Normal (35-70)", "Overbought (>70)"])
-                
-                st.session_state['f_sektor'] = f_sektor
-                st.session_state['f_min_score'] = f_min_score
-                st.session_state['f_rsi_mode'] = f_rsi_mode
+if 'raw_results' not in st.session_state:
+    cached_data, last_ts = load_from_db()
+    st.session_state['raw_results'] = cached_data
+    st.session_state['last_updated'] = last_ts
 
-    # HALAMAN UTAMA
-    # Solusi: Menambahkan Tab Navigasi Atas sebagai cadangan jika sidebar tertutup
-    top_nav = st.tabs(["🔍 Screener", "⭐ Watchlist", "⚙️ Akun"])
+if 'selected_ticker' not in st.session_state:
+    st.session_state['selected_ticker'] = None
+
+# Sidebar
+with st.sidebar:
+    st.header("1. Masukan Ticker")
+    default_t = "BBCA, BBRI, TLKM, ASII, GOTO, BMRI, UNTR, ADRO"
+    input_tickers = st.text_area("Daftar Ticker:", default_t, height=100)
     
-    # Hubungkan tab ke menu_option (Sinkronisasi dua arah sederhana)
-    # Catatan: Di Streamlit, tab biasanya digunakan untuk konten, 
-    # di sini kita gunakan sebagai navigasi utama yang persisten di layar.
+    if st.button("Tarik Data & Analisis Baru", use_container_width=True):
+        st.session_state['selected_ticker'] = None
+        t_list = [t.strip().upper() + (".JK" if "." not in t else "") for t in input_tickers.split(",") if t.strip()]
+        with st.spinner("Menghubungi Server yFinance..."):
+            res = [get_signals(t) for t in t_list]
+            valid_res = [r for r in res if r]
+            st.session_state['raw_results'] = valid_res
+            st.session_state['last_updated'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            save_to_db(valid_res, st.session_state['last_updated'])
 
-    # 1. LOGIK HALAMAN SCREENER
-    with top_nav[0]:
-        st.title("🖥️ Market Screener")
+    if st.session_state['raw_results']:
+        st.write("---")
+        st.header("2. Filter Dashboard")
+        df_all = pd.DataFrame(st.session_state['raw_results'])
+        f_sektor = st.multiselect("Filter Sektor:", sorted(df_all['Sektor'].unique()), default=df_all['Sektor'].unique())
+        f_min_score = st.slider("Skor Minimal:", 0, 100, 0)
+        f_ma20 = st.radio("Sinyal MA20:", ["Semua", "Hanya Bullish ✅", "Hanya Bearish ❌"])
+
+        filtered = df_all[
+            (df_all['Sektor'].isin(f_sektor)) & 
+            (df_all['Total Skor'] >= f_min_score)
+        ]
+        if f_ma20 == "Hanya Bullish ✅": filtered = filtered[filtered['ma20_raw'] == True]
+        if f_ma20 == "Hanya Bearish ❌": filtered = filtered[filtered['ma20_raw'] == False]
+    else:
+        filtered = pd.DataFrame()
+
+# --- MAIN DISPLAY ---
+
+if not filtered.empty:
+    st.caption(f"📅 Data Terakhir: {st.session_state['last_updated']}")
+    
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Avg Score", f"{filtered['Total Skor'].mean():.1f}")
+    m2.metric("Oversold", len(filtered[filtered['RSI'] < 35]))
+    m3.metric("Bullish MA50", len(filtered[filtered['MA50'] == '⬆️ Above']))
+    m4.metric("Vol Spike", len(filtered[filtered['Vol Ratio'] > 2.0]))
+
+    st.divider()
+    
+    df_show = filtered.copy()
+    if 'df' in df_show.columns: df_show = df_show.drop(columns=['df'])
+    df_show = df_show.drop(columns=['ma20_raw']).sort_values(by="Total Skor", ascending=False)
+    
+    event = st.dataframe(
+        df_show,
+        use_container_width=True,
+        hide_index=True,
+        on_select="rerun",
+        selection_mode="single-row",
+        column_config={
+            "Total Skor": st.column_config.ProgressColumn("Skor", min_value=0, max_value=100, format="%d"),
+            "Chg %": st.column_config.NumberColumn("Change", format="%.2f%%"),
+            "Vol Ratio": st.column_config.NumberColumn("Vol Ratio", format="%.2fx")
+        }
+    )
+
+    if event.selection.rows:
+        sel_idx = event.selection.rows[0]
+        st.session_state['selected_ticker'] = df_show.iloc[sel_idx]['Ticker']
+
+    if st.session_state['selected_ticker']:
+        st.divider()
+        st.header(f"🔍 Detail: {st.session_state['selected_ticker']}")
         
-        if 'scan_results' in st.session_state:
-            df_final = pd.DataFrame(st.session_state['scan_results'])
+        ticker_data = next(i for i in st.session_state['raw_results'] if i["Ticker"] == st.session_state['selected_ticker'])
+        df_chart = ticker_data.get('df')
+        
+        if df_chart is None:
+            with st.spinner("Memuat data historis..."):
+                try:
+                    ticker_obj = yf.Ticker(st.session_state['selected_ticker'])
+                    df_chart = ticker_obj.history(period="120d")
+                except: st.error("Gagal memuat chart.")
             
-            # Terapkan Filter
-            filtered = df_final[
-                (df_final['Sektor'].isin(st.session_state.get('f_sektor', df_final['Sektor'].unique()))) & 
-                (df_final['Total Skor'] >= st.session_state.get('f_min_score', 0))
-            ]
+        if df_chart is not None and not df_chart.empty:
+            df_chart['MA50'] = df_chart['Close'].rolling(window=50).mean()
+            c_left, c_right = st.columns([2, 1])
+            with c_left:
+                fig = go.Figure(data=[go.Candlestick(x=df_chart.index, open=df_chart['Open'], high=df_chart['High'], low=df_chart['Low'], close=df_chart['Close'], name="Price")])
+                fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['MA50'], line=dict(color='#fbbf24', width=2), name="MA50"))
+                ob = find_order_blocks(df_chart)
+                if ob: fig.add_hline(y=ob['price'], line_dash="dash", line_color="#22d3ee", annotation_text="OB Zone")
+                
+                fig.update_layout(
+                    template="plotly_dark", xaxis_rangeslider_visible=False, height=500,
+                    margin=dict(l=0, r=0, t=20, b=0), paper_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor='rgba(0,0,0,0)', font=dict(color="white"),
+                    xaxis=dict(tickfont=dict(color="#ffffff")),
+                    yaxis=dict(tickfont=dict(color="#ffffff"), gridcolor="#334155")
+                )
+                st.plotly_chart(fig, use_container_width=True)
             
-            rsi_mode = st.session_state.get('f_rsi_mode', "Semua")
-            if rsi_mode == "Oversold (<35)": filtered = filtered[filtered['RSI'] < 35]
-            elif rsi_mode == "Normal (35-70)": filtered = filtered[(filtered['RSI'] >= 35) & (filtered['RSI'] <= 70)]
-            elif rsi_mode == "Overbought (>70)": filtered = filtered[filtered['RSI'] > 70]
-
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Hasil Filter", len(filtered))
-            c2.metric("Oversold", len(filtered[filtered['RSI'] < 35]))
-            c3.metric("Bullish Structure", len(filtered[filtered['Structure'] == 'BOS Bullish']))
-
-            st.divider()
-            
-            st.dataframe(
-                filtered.sort_values(by="Total Skor", ascending=False), 
-                use_container_width=True, 
-                hide_index=True,
-                column_config={
-                    "Total Skor": st.column_config.ProgressColumn("Skor Kekuatan", min_value=0, max_value=100),
-                    "Chg %": st.column_config.NumberColumn("Change", format="%.2f%%"),
-                    "Harga": st.column_config.NumberColumn("Price", format="Rp %d")
-                }
-            )
-            st.caption(f"Data terakhir diperbarui: {st.session_state.get('scan_ts', 'N/A')}")
-        else:
-            st.info("💡 Gunakan Panel Input di Sidebar (klik panah di pojok kiri atas jika tertutup) untuk memulai scan.")
-
-    # 2. LOGIK HALAMAN WATCHLIST
-    with top_nav[1]:
-        st.title("⭐ Watchlist Saya")
-        st.warning("Fitur penyimpanan sedang dalam pengembangan.")
-
-    # 3. LOGIK HALAMAN AKUN
-    with top_nav[2]:
-        st.title("⚙️ Pengaturan Akun")
-        st.write(f"Login sebagai: **{st.session_state.get('user')}**")
-        if st.button("🚪 LOGOUT DARI APLIKASI"):
-            st.session_state["logged_in"] = False
-            st.rerun()
+            with c_right:
+                # Menghasilkan Insight Dinamis
+                dynamic_analysis = generate_dynamic_insight(ticker_data, ob)
+                
+                st.markdown(f"""
+                <div class="detail-box">
+                    <h4 style="color:#ffffff;">Price Action Detail</h4>
+                    <p>Structure: <b style='color:#34d399;'>{ticker_data['Structure']}</b></p>
+                    <p>RSI: <b>{ticker_data['RSI']}</b></p>
+                    <p>Skor: <b>{ticker_data['Total Skor']}/100</b></p>
+                    <hr style="border-color:#475569;">
+                    <p style="color:#e2e8f0; font-weight: 600;">Analisis Insight:</p>
+                    <p style="color:#ffffff; font-size: 14px; line-height: 1.6;">{dynamic_analysis}</p>
+                </div>
+                """, unsafe_allow_html=True)
+                st.write("**RSI Momentum**")
+                st.progress(min(max(ticker_data['RSI']/100, 0.0), 1.0))
+else:
+    if st.session_state['raw_results']:
+        st.warning("Tidak ada saham yang sesuai dengan filter.")
+    else:
+        st.info("💡 Klik 'Tarik Data & Analisis Baru' untuk memulai.")
