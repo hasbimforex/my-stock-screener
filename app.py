@@ -16,53 +16,63 @@ USER_CREDENTIALS = {
 
 # --- KONFIGURASI HALAMAN ---
 st.set_page_config(
-    page_title="StockScreener Pro v3", 
+    page_title="StockScreener Pro", 
     layout="wide", 
     initial_sidebar_state="expanded"
 )
 
-# --- CSS UNTUK SIDEBAR STATIS & PERBAIKAN UI ---
+# --- CSS: SIDEBAR STATIS & PERBAIKAN UI (DROPDOWN/INPUT) ---
 st.markdown("""
 <style>
     /* MEMAKSA SIDEBAR TETAP TERBUKA */
     [data-testid="stSidebar"] {
         left: 0 !important;
-        width: 280px !important;
+        width: 300px !important;
         transform: none !important;
         visibility: visible !important;
         background-color: #020617 !important;
         border-right: 1px solid #1e293b;
     }
     
-    /* Menyesuaikan margin konten utama */
+    /* MENYEMBUNYIKAN TOMBOL TOGGLE */
+    [data-testid="stSidebarCollapseButton"] {
+        display: none !important;
+    }
+
+    /* PENYESUAIAN KONTEN UTAMA */
     [data-testid="stAppViewBlockContainer"] {
         margin-left: 20px !important;
         padding-top: 2rem !important;
     }
-
-    /* Menyembunyikan tombol buka/tutup sidebar */
-    [data-testid="stSidebarCollapseButton"] {
-        display: none !important;
-    }
     
     .stApp { background-color: #0f172a !important; }
+
+    /* FIX: WARNA DROPDOWN & INPUT (TEKS PUTIH DI LATAR GELAP) */
+    div[data-baseweb="select"], div[data-testid="stTextInput"] input, div[data-testid="stTextArea"] textarea {
+        background-color: #1e293b !important;
+        color: #ffffff !important;
+        border: 1px solid #334155 !important;
+    }
     
-    /* FIX: Teks Putih untuk Semua Elemen Input agar terlihat di latar gelap */
-    input, textarea, select, div[data-baseweb="select"] {
+    /* Menu Popover (pilihan dropdown) */
+    div[data-baseweb="popover"], div[role="listbox"], ul {
         background-color: #1e293b !important;
         color: #ffffff !important;
     }
     
-    div[data-baseweb="popover"] {
-        background-color: #1e293b !important;
+    li[role="option"] {
         color: #ffffff !important;
+    }
+    
+    li[role="option"]:hover {
+        background-color: #2563eb !important;
     }
 
     p, span, div, h1, h2, h3, h4, label { 
         color: #ffffff !important; 
     }
 
-    /* Styling Button */
+    /* Styling Tombol */
     .stButton > button { 
         background-color: #2563eb !important; 
         color: #ffffff !important; 
@@ -72,16 +82,10 @@ st.markdown("""
         border: none;
         transition: all 0.3s ease;
     }
-    .stButton > button:hover {
-        background-color: #3b82f6 !important;
-        box-shadow: 0 4px 12px rgba(37, 99, 235, 0.4);
-    }
     
-    /* Dataframe Styling */
     .stDataFrame { 
         background-color: #1e293b; 
         border-radius: 8px; 
-        padding: 10px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -94,112 +98,105 @@ def calculate_rsi(data, window=14):
     rs = gain / loss.replace(0, np.nan)
     return (100 - (100 / (1 + rs))).fillna(50)
 
-def detect_smc_structure(df):
+def detect_smc(df):
     """Analisis Smart Money Concept (SMC) Sederhana"""
     try:
-        window = 5
+        w = 5
         df = df.copy()
-        # Mencari Pivot High/Low
-        df['High_Swing'] = df['High'].rolling(window=window, center=True).apply(lambda x: x.max() == x[window//2])
-        df['Low_Swing'] = df['Low'].rolling(window=window, center=True).apply(lambda x: x.min() == x[window//2])
+        df['H_Swing'] = df['High'].rolling(window=w, center=True).apply(lambda x: x.max() == x[w//2])
+        df['L_Swing'] = df['Low'].rolling(window=w, center=True).apply(lambda x: x.min() == x[w//2])
         
-        highs = df[df['High_Swing'] == 1]['High']
-        lows = df[df['Low_Swing'] == 1]['Low']
+        highs = df[df['H_Swing'] == 1]['High']
+        lows = df[df['L_Swing'] == 1]['Low']
         
-        if len(highs) < 2 or len(lows) < 2: return "Sideways/Consolidation"
+        if len(highs) < 2 or len(lows) < 2: return "Sideways"
         
-        last_high = highs.iloc[-1]
-        prev_high = highs.iloc[-2]
-        last_low = lows.iloc[-1]
-        prev_low = lows.iloc[-2]
-        current_close = df['Close'].iloc[-1]
+        last_h, prev_h = highs.iloc[-1], highs.iloc[-2]
+        last_l, prev_l = lows.iloc[-1], lows.iloc[-2]
+        close = df['Close'].iloc[-1]
         
-        # Logika BOS (Break of Structure) & Trend
-        if current_close > last_high: return "BOS Bullish (Breakout)"
-        if current_close < last_low: return "BOS Bearish (Breakdown)"
-        
-        if last_high > prev_high and last_low > prev_low: return "Uptrend (HH/HL)"
-        if last_high < prev_high and last_low < prev_low: return "Downtrend (LH/LL)"
-        
-        return "Neutral / Range"
-    except:
-        return "Data Insufficient"
+        if close > last_h: return "BOS Bullish (Breakout)"
+        if close < last_l: return "BOS Bearish (Breakdown)"
+        if last_h > prev_h and last_l > prev_l: return "Uptrend (HH/HL)"
+        if last_h < prev_h and last_l < prev_l: return "Downtrend (LH/LL)"
+        return "Neutral"
+    except: return "N/A"
 
-def get_signals_individual(ticker_symbol, df, info):
+def get_stock_data(ticker, df, info):
     try:
         df = df.dropna()
-        if df.empty or len(df) < 50: return None
+        if len(df) < 50: return None
         
         last = df.iloc[-1]
         prev = df.iloc[-2]
         price = float(last['Close'])
         
-        avg_vol = df['Volume'].shift(1).rolling(window=20).mean().iloc[-1]
-        vol_ratio = float(last['Volume'] / avg_vol) if avg_vol > 0 else 0
-        
-        rsi = float(calculate_rsi(df['Close'], 14).iloc[-1])
-        ma20 = float(df['Close'].rolling(window=20).mean().iloc[-1])
-        ma50 = float(df['Close'].rolling(window=50).mean().iloc[-1])
+        rsi = float(calculate_rsi(df['Close']).iloc[-1])
+        vol_avg = df['Volume'].shift(1).rolling(window=20).mean().iloc[-1]
+        vol_ratio = last['Volume'] / vol_avg if vol_avg > 0 else 0
+        ma50 = df['Close'].rolling(50).mean().iloc[-1]
         
         # Scoring System
         score = 0
         if price > ma50: score += 30
-        if price > ma20: score += 20
-        if vol_ratio > 1.5: score += 25
-        if rsi < 40: score += 25
-        if rsi > 70: score -= 15
+        if rsi < 40: score += 35
+        if vol_ratio > 1.5: score += 35
         
         return {
-            "Ticker": ticker_symbol,
-            "Nama": info.get('longName', 'N/A'),
+            "Ticker": ticker,
+            "Nama": info.get('longName', ticker),
             "Sektor": info.get('sector', 'N/A'),
             "Harga": int(price),
-            "Chg %": float(round(((price - prev['Close']) / prev['Close']) * 100, 2)),
-            "Total Skor": min(max(score, 0), 100),
-            "Vol Ratio": float(round(vol_ratio, 2)),
-            "RSI": float(round(rsi, 1)),
-            "SMC Structure": detect_smc_structure(df),
-            "MA50 Status": "Bullish" if price > ma50 else "Bearish"
+            "Chg %": round(((price - prev['Close']) / prev['Close']) * 100, 2),
+            "RSI": round(rsi, 1),
+            "Vol Ratio": round(vol_ratio, 2),
+            "SMC Analysis": detect_smc(df),
+            "Total Skor": int(min(score, 100)),
+            "MA50 Status": "Above" if price > ma50 else "Below"
         }
     except: return None
 
-def plot_stock_chart(ticker, name, df):
+def plot_chart(ticker, name, df):
     df = df.copy()
-    df['MA20'] = df['Close'].rolling(window=20).mean()
-    df['MA50'] = df['Close'].rolling(window=50).mean()
+    df['MA20'] = df['Close'].rolling(20).mean()
+    df['MA50'] = df['Close'].rolling(50).mean()
     df['RSI'] = calculate_rsi(df['Close'])
     
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
-                        vertical_spacing=0.05, row_heights=[0.7, 0.3])
-
-    # Candlestick Chart
-    fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'],
-                                low=df['Low'], close=df['Close'], name="Price"), row=1, col=1)
+                        vertical_spacing=0.08, row_heights=[0.7, 0.3])
     
-    # Indicators
+    # CANDLESTICK
+    fig.add_trace(go.Candlestick(
+        x=df.index, open=df['Open'], high=df['High'], 
+        low=df['Low'], close=df['Close'], name="Price"
+    ), row=1, col=1)
+    
     fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], name="MA20", line=dict(color='orange', width=1)), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['MA50'], name="MA50", line=dict(color='cyan', width=1.5)), row=1, col=1)
     
-    # RSI Panel
-    fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], name="RSI", line=dict(color='#ff00ff', width=1)), row=2, col=1)
+    # RSI
+    fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], name="RSI", line=dict(color='#ff00ff', width=1.5)), row=2, col=1)
     fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
     fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
-
-    fig.update_layout(height=600, title=f"{name} ({ticker})", template="plotly_dark", 
-                      margin=dict(l=10, r=10, t=50, b=10),
-                      xaxis_rangeslider_visible=False,
-                      showlegend=True)
+    
+    fig.update_layout(
+        height=600, 
+        title=f"{name} ({ticker})", 
+        template="plotly_dark", 
+        xaxis_rangeslider_visible=False, 
+        margin=dict(l=10, r=10, t=50, b=10)
+    )
     return fig
 
-# --- AUTH & SESSION STATE ---
+# --- LOGIKA APLIKASI ---
 if "logged_in" not in st.session_state: st.session_state["logged_in"] = False
 if "watchlist" not in st.session_state: st.session_state["watchlist"] = []
 if "results" not in st.session_state: st.session_state["results"] = []
 
-def login_screen():
+if not st.session_state["logged_in"]:
     st.markdown("<br><h1 style='text-align: center; color: #3b82f6;'>🚀 StockScreener Pro</h1>", unsafe_allow_html=True)
-    col1, col2, col3 = st.columns([1, 1.2, 1])
-    with col2:
+    c1, c2, c3 = st.columns([1, 1.2, 1])
+    with c2:
         with st.form("login"):
             u = st.text_input("Username")
             p = st.text_input("Password", type="password")
@@ -208,142 +205,97 @@ def login_screen():
                     st.session_state["logged_in"] = True
                     st.session_state["user"] = u
                     st.rerun()
-                else: st.error("Username atau password salah.")
-
-# --- MAIN APP ---
-if not st.session_state["logged_in"]:
-    login_screen()
+                else: st.error("Kredensial salah.")
 else:
+    # Sidebar
     with st.sidebar:
         st.markdown(f"### 👤 {st.session_state['user'].upper()}")
         st.divider()
-        menu = st.radio("MAIN NAVIGATION", ["🔍 Screener", "⭐ Watchlist", "⚙️ Akun"])
+        menu = st.radio("MAIN NAVIGATION", ["🔍 Screener", "⭐ Watchlist", "🚪 Logout"])
         
-        st.divider()
         if menu == "🔍 Screener":
-            st.markdown("### 📥 SCANNER INPUT")
-            raw_input = st.text_area("List Ticker (pisahkan koma):", "BBCA, BBRI, TLKM, ASII, AMRT, GOTO, BMRI, BBNI", height=120)
+            st.divider()
+            st.markdown("### 📥 INPUT TICKERS")
+            input_t = st.text_area("Gunakan koma (contoh: BBCA, BBRI):", "BBCA, BBRI, TLKM, ASII, AMRT, GOTO, BMRI, BBNI", height=150)
             if st.button("RUN SCANNER"):
-                tickers = [t.strip().upper() + (".JK" if "." not in t else "") for t in raw_input.split(",") if t.strip()]
-                results = []
-                progress_bar = st.progress(0)
+                res = []
+                tickers = [x.strip().upper() + (".JK" if "." not in x else "") for x in input_t.split(",") if x.strip()]
+                prog = st.progress(0)
                 for i, t in enumerate(tickers):
                     try:
-                        ticker_obj = yf.Ticker(t)
-                        info = ticker_obj.info
-                        data = ticker_obj.history(period="150d")
+                        obj = yf.Ticker(t)
+                        data = obj.history(period="150d")
                         if not data.empty:
-                            res = get_signals_individual(t, data, info)
-                            if res: results.append(res)
+                            s = get_stock_data(t, data, obj.info)
+                            if s: res.append(s)
                     except: pass
-                    progress_bar.progress((i + 1) / len(tickers))
-                
-                st.session_state['results'] = results
-
-        st.markdown("<br>" * 5, unsafe_allow_html=True)
-        if st.button("🚪 LOGOUT"):
+                    prog.progress((i + 1) / len(tickers))
+                st.session_state['results'] = res
+        
+        if menu == "🚪 Logout":
             st.session_state["logged_in"] = False
             st.rerun()
 
+    # Konten Utama
     if menu == "🔍 Screener":
         st.title("🖥️ Market Screener")
-        
         if st.session_state.get('results'):
-            df_res = pd.DataFrame(st.session_state['results'])
+            df = pd.DataFrame(st.session_state['results'])
             
-            if not df_res.empty:
-                # FILTER ROW
-                c1, c2, c3 = st.columns([1, 1, 1])
-                with c1: 
-                    min_score = st.slider("Min Technical Score", 0, 100, 30)
-                with c2: 
-                    all_sectors = ["All Sectors"] + sorted([s for s in df_res['Sektor'].unique() if s])
-                    selected_sector = st.selectbox("Sektor Industri", all_sectors)
-                with c3: 
-                    search_ticker = st.text_input("Cari Nama/Ticker", "")
-                
-                # Apply Filters
-                filtered = df_res[df_res['Total Skor'] >= min_score]
-                if selected_sector != "All Sectors":
-                    filtered = filtered[filtered['Sektor'] == selected_sector]
-                if search_ticker:
-                    filtered = filtered[
-                        filtered['Ticker'].str.contains(search_ticker.upper()) | 
-                        filtered['Nama'].str.contains(search_ticker, case=False)
-                    ]
-
-                # Statistics
-                m1, m2, m3, m4 = st.columns(4)
-                m1.metric("Total Scan", len(df_res))
-                m2.metric("Lolos Filter", len(filtered))
-                if not filtered.empty:
-                    m3.metric("Bullish Structure", len(filtered[filtered['SMC Structure'].str.contains("Bullish|HH")]))
-                    m4.metric("MA50 Bullish", len(filtered[filtered['MA50 Status'] == "Bullish"]))
-
-                # Main Results Table
-                st.dataframe(
-                    filtered.sort_values("Total Skor", ascending=False),
-                    use_container_width=True, hide_index=True,
-                    column_config={
-                        "Total Skor": st.column_config.ProgressColumn("Rating", min_value=0, max_value=100),
-                        "Harga": st.column_config.NumberColumn("Price", format="Rp %d"),
-                        "Chg %": st.column_config.NumberColumn("Change", format="%.2f%%"),
-                        "Vol Ratio": st.column_config.NumberColumn("Vol x Avg")
-                    }
-                )
-                
-                # Analysis Detail Section
-                st.divider()
-                st.subheader("📊 Advanced Technical Analysis")
-                
-                if not filtered.empty:
-                    selected_stock = st.selectbox("Pilih Emiten untuk Dianalisis:", filtered['Ticker'].tolist())
-                    
-                    if selected_stock:
-                        row = filtered[filtered['Ticker'] == selected_stock].iloc[0]
-                        col_chart, col_info = st.columns([2.5, 1])
-                        
-                        with col_chart:
-                            hist_data = yf.download(selected_stock, period="120d", progress=False)
-                            st.plotly_chart(plot_stock_chart(selected_stock, row['Nama'], hist_data), use_container_width=True)
-                        
-                        with col_info:
-                            st.markdown(f"### {row['Nama']}")
-                            st.write(f"**Sektor:** {row['Sektor']}")
-                            st.write(f"---")
-                            st.success(f"**SMC Analysis:** {row['SMC Structure']}")
-                            st.info(f"**RSI (14):** {row['RSI']}")
-                            st.info(f"**MA50 Position:** {row['MA50 Status']}")
-                            
-                            if st.button("➕ Simpan ke Watchlist"):
-                                if selected_stock not in st.session_state['watchlist']:
-                                    st.session_state['watchlist'].append(selected_stock)
-                                    st.toast(f"{selected_stock} Berhasil Ditambahkan!")
-                else:
-                    st.warning("Tidak ada emiten yang sesuai dengan kriteria filter.")
-        else:
-            st.info("👋 Selamat datang di StockScreener Pro. Masukkan list emiten di sidebar dan klik 'Run Scanner' untuk memulai analisis SMC.")
+            # Barisan Filter
+            f1, f2, f3 = st.columns(3)
+            with f1: min_s = st.slider("Filter Skor Minimal", 0, 100, 30)
+            with f2: 
+                sects = ["All Sectors"] + sorted([s for s in df['Sektor'].unique() if s])
+                sel_sect = st.selectbox("Sektor", sects)
+            with f3: cari = st.text_input("Cari Ticker/Nama")
+            
+            # Apply Filter
+            filt = df[df['Total Skor'] >= min_s]
+            if sel_sect != "All Sectors": filt = filt[filt['Sektor'] == sel_sect]
+            if cari: filt = filt[filt['Ticker'].str.contains(cari.upper()) | filt['Nama'].str.contains(cari, case=False)]
+            
+            # Tabel Utama
+            st.dataframe(
+                filt.sort_values("Total Skor", ascending=False), 
+                use_container_width=True, hide_index=True,
+                column_config={
+                    "Total Skor": st.column_config.ProgressColumn("Rating", min_value=0, max_value=100),
+                    "Harga": st.column_config.NumberColumn("Price", format="Rp %d"),
+                    "Chg %": st.column_config.NumberColumn("Change", format="%.2f%%")
+                }
+            )
+            
+            st.divider()
+            st.subheader("📊 Analisis Candlestick & SMC Detail")
+            if not filt.empty:
+                sel = st.selectbox("Pilih emiten untuk bedah detail:", filt['Ticker'].tolist())
+                if sel:
+                    row = filt[filt['Ticker'] == sel].iloc[0]
+                    c_chart, c_info = st.columns([2.5, 1])
+                    with c_chart:
+                        h_data = yf.download(sel, period="120d", progress=False)
+                        st.plotly_chart(plot_chart(sel, row['Nama'], h_data), use_container_width=True)
+                    with c_info:
+                        st.markdown(f"### {row['Nama']}")
+                        st.write(f"**Sektor:** {row['Sektor']}")
+                        st.info(f"**SMC Structure:** {row['SMC Analysis']}")
+                        st.info(f"**RSI (14):** {row['RSI']}")
+                        st.info(f"**Position vs MA50:** {row['MA50 Status']}")
+                        if st.button("➕ Tambah ke Watchlist"):
+                            if sel not in st.session_state['watchlist']:
+                                st.session_state['watchlist'].append(sel)
+                                st.toast(f"{sel} disimpan!")
 
     elif menu == "⭐ Watchlist":
         st.title("⭐ My Premium Watchlist")
         if not st.session_state['watchlist']:
-            st.warning("Watchlist kosong. Silakan tambahkan emiten dari menu Screener.")
+            st.warning("Watchlist masih kosong.")
         else:
-            for stock in st.session_state['watchlist']:
-                with st.expander(f"📈 ANALISIS MENDALAM: {stock}", expanded=True):
-                    cw1, cw2 = st.columns([3, 1])
-                    with cw1:
-                        data_w = yf.download(stock, period="60d", progress=False)
-                        st.plotly_chart(plot_stock_chart(stock, stock, data_w), use_container_width=True)
-                    with cw2:
-                        st.metric("Price Last", f"Rp {int(data_w['Close'].iloc[-1])}")
-                        if st.button(f"🗑️ Hapus {stock}", key=f"del_{stock}"):
-                            st.session_state['watchlist'].remove(stock)
-                            st.rerun()
-
-    elif menu == "⚙️ Akun":
-        st.title("⚙️ Pengaturan")
-        st.write(f"User Active: **{st.session_state['user']}**")
-        st.write("Status: **Premium Member**")
-        st.divider()
-        st.button("Update Password", disabled=True)
+            for s in st.session_state['watchlist']:
+                with st.expander(f"📈 DETAIL ANALISIS: {s}", expanded=True):
+                    d_w = yf.download(s, period="60d", progress=False)
+                    st.plotly_chart(plot_chart(s, s, d_w), use_container_width=True)
+                    if st.button(f"🗑️ Hapus {s}", key=f"del_{s}"):
+                        st.session_state['watchlist'].remove(s)
+                        st.rerun()
