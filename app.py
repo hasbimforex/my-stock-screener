@@ -5,7 +5,7 @@ import numpy as np
 import plotly.graph_objects as go
 import sqlite3
 import json
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 # --- KONFIGURASI HALAMAN ---
 st.set_page_config(page_title="StockScreener Pro: Full Analysis", layout="wide")
@@ -19,7 +19,7 @@ USERS = {
     "investor2": "bluechip99"
 }
 
-# --- CSS Kustom ---
+# --- CSS Kustom untuk Tema Gelap dan UI Premium ---
 st.markdown("""
 <style>
     .stApp { background-color: #0f172a !important; }
@@ -71,7 +71,6 @@ def login():
         _, col2, _ = st.columns([1, 2, 1])
         with col2:
             st.markdown("<h2 style='text-align: center;'>🔐 Login StockScreener Pro</h2>", unsafe_allow_html=True)
-            # Menggunakan Form agar input lebih stabil dan tidak dianggap salah karena interaksi UI
             with st.form("login_form"):
                 username = st.text_input("Username").strip()
                 password = st.text_input("Password", type="password")
@@ -87,7 +86,7 @@ def login():
         return False
     return True
 
-# --- FUNGSI DATABASE LOKAL ---
+# --- FUNGSI DATABASE LOKAL (Caching) ---
 def init_db():
     conn = sqlite3.connect('stock_cache.db')
     c = conn.cursor()
@@ -191,6 +190,7 @@ def get_signals(ticker_symbol):
         price = last['Close']
         vol_ratio = last['Volume'] / last['Avg_Vol_5'] if last['Avg_Vol_5'] > 0 else 0
         
+        # Scoring Logic
         vol_score = 45 if vol_ratio > 2.0 else (30 if vol_ratio > 1.5 else (10 if vol_ratio > 1.0 else 0))
         ma50_score = 30 if price > last['MA50'] else 0
         rsi_score = 25 if last['RSI'] < 35 else (15 if last['RSI'] < 65 else 5)
@@ -244,7 +244,9 @@ if login():
                 res = [get_signals(t) for t in t_list]
                 valid_res = [r for r in res if r]
                 st.session_state['raw_results'] = valid_res
-                st.session_state['last_updated'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                # Set timezone ke WIB (UTC+7)
+                wib = timezone(timedelta(hours=7))
+                st.session_state['last_updated'] = datetime.now(wib).strftime("%Y-%m-%d %H:%M:%S")
                 save_to_db(valid_res, st.session_state['last_updated'])
 
         if st.session_state['raw_results']:
@@ -266,7 +268,7 @@ if login():
 
     # --- MAIN DISPLAY ---
     if not filtered.empty:
-        st.caption(f"📅 Data Terakhir: {st.session_state['last_updated']}")
+        st.caption(f"📅 Data Terakhir (WIB): {st.session_state['last_updated']}")
         
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Avg Score", f"{filtered['Total Skor'].mean():.1f}")
@@ -280,6 +282,7 @@ if login():
         if 'df' in df_show.columns: df_show = df_show.drop(columns=['df'])
         df_show = df_show.drop(columns=['ma20_raw']).sort_values(by="Total Skor", ascending=False)
         
+        # Tabel Interaktif
         event = st.dataframe(
             df_show,
             use_container_width=True,
@@ -304,6 +307,7 @@ if login():
             ticker_data = next(i for i in st.session_state['raw_results'] if i["Ticker"] == st.session_state['selected_ticker'])
             df_chart = ticker_data.get('df')
             
+            # Re-fetch data chart jika tidak ada di cache (karena df tidak disimpan di sqlite)
             if df_chart is None:
                 ticker_obj = yf.Ticker(st.session_state['selected_ticker'])
                 df_chart = ticker_obj.history(period="120d")
@@ -351,5 +355,3 @@ if login():
             st.warning("Tidak ada data yang cocok dengan filter.")
         else:
             st.info("💡 Masukkan ticker di sidebar dan klik 'Tarik Data' untuk memulai analisis.")
-
-
