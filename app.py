@@ -68,6 +68,11 @@ st.markdown("""
     
     .metric-label { color: #94a3b8; font-size: 11px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px; }
     .metric-value { color: #ffffff; font-size: 18px; font-weight: bold; }
+    
+    /* Multiselect/Selectbox styling */
+    div[data-baseweb="select"] > div {
+        background-color: #1e293b !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -118,8 +123,6 @@ def detect_market_structure(df):
 
 def find_order_blocks(df):
     obs = []
-    # Mencari Bullish Order Block (Demand Zone)
-    # Candle bearish terakhir sebelum pergerakan impulsif naik
     for i in range(1, len(df)-5):
         if df['Close'].iloc[i] < df['Open'].iloc[i]: 
             if df['Close'].iloc[i+3] > df['High'].iloc[i] * 1.02:
@@ -139,7 +142,7 @@ def get_trading_setup(price, structure, ob):
     stop_loss = ob['low'] * 0.992 
     risk = entry_price - stop_loss
     if risk <= 0: return None
-    take_profit = entry_price + (risk * 2) # RR Minimal 1:2
+    take_profit = entry_price + (risk * 2) 
     return {
         "Type": "BUY",
         "Entry": entry_price,
@@ -154,7 +157,6 @@ def get_signals(ticker_symbol):
         df = ticker.history(period="120d")
         if df.empty or len(df) < 50: return None
         
-        # Kalkulasi MA
         df['MA20'] = df['Close'].rolling(window=20).mean()
         df['MA50'] = df['Close'].rolling(window=50).mean()
         df['RSI'] = calculate_rsi(df['Close'])
@@ -165,11 +167,9 @@ def get_signals(ticker_symbol):
         vol_ratio = last['Volume'] / last['Avg_Vol_5'] if last['Avg_Vol_5'] > 0 else 0
         struct = detect_market_structure(df)
         
-        # Status MA
         ma20_status = "✅ Bullish" if price > last['MA20'] else "❌ Bearish"
         ma50_status = "⬆️ Atas" if price > last['MA50'] else "⬇️ Bawah"
         
-        # Penilaian Skor
         v_score = 40 if vol_ratio > 2.0 else (20 if vol_ratio > 1.5 else 5)
         ma_score = 30 if price > last['MA50'] else 0
         rsi_score = 20 if last['RSI'] < 35 else (10 if last['RSI'] < 65 else 0)
@@ -213,13 +213,43 @@ if login():
                 wib = timezone(timedelta(hours=7))
                 st.session_state['ts'] = datetime.now(wib).strftime("%H:%M:%S WIB")
 
-    if 'results' in st.session_state and st.session_state['results']:
-        df_res = pd.DataFrame(st.session_state['results'])
+        # --- FITUR FILTERING (DIKEMBALIKAN) ---
+        if 'results' in st.session_state and st.session_state['results']:
+            st.divider()
+            st.header("2. Filter Dashboard")
+            df_full = pd.DataFrame(st.session_state['results'])
+            
+            f_sektor = st.multiselect("Filter Sektor:", sorted(df_full['Sektor'].unique()), default=df_full['Sektor'].unique())
+            f_min_score = st.slider("Skor Minimal:", 0, 100, 0)
+            f_ma20 = st.radio("Sinyal MA20:", ["Semua", "Hanya Bullish ✅", "Hanya Bearish ❌"])
+
+            # Aplikasi Filtering
+            filtered = df_full[
+                (df_full['Sektor'].isin(f_sektor)) & 
+                (df_full['Skor'] >= f_min_score)
+            ]
+            if f_ma20 == "Hanya Bullish ✅":
+                filtered = filtered[filtered['MA20'] == "✅ Bullish"]
+            elif f_ma20 == "Hanya Bearish ❌":
+                filtered = filtered[filtered['MA20'] == "❌ Bearish"]
+        else:
+            filtered = pd.DataFrame()
+
+    if not filtered.empty:
         st.caption(f"📅 Terakhir Diperbarui: {st.session_state['ts']}")
         
+        # Metrik Ringkasan (Berdasarkan Data Terfilter)
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Avg Score", f"{filtered['Skor'].mean():.1f}")
+        m2.metric("Oversold (RSI < 35)", len(filtered[filtered['RSI'] < 35]))
+        m3.metric("Bullish MA50", len(filtered[filtered['MA50'] == '⬆️ Atas']))
+        m4.metric("Vol Spike", len(filtered[filtered['Vol Ratio'] > 2.0]))
+        
+        st.divider()
+
         # Tabel Utama
         event = st.dataframe(
-            df_res.drop(columns=['df']).sort_values(by="Skor", ascending=False),
+            filtered.drop(columns=['df']).sort_values(by="Skor", ascending=False),
             use_container_width=True,
             hide_index=True,
             on_select="rerun",
@@ -233,7 +263,7 @@ if login():
 
         if event.selection.rows:
             sel_idx = event.selection.rows[0]
-            sel_ticker = df_res.sort_values(by="Skor", ascending=False).iloc[sel_idx]
+            sel_ticker = filtered.sort_values(by="Skor", ascending=False).iloc[sel_idx]
             
             st.divider()
             st.header(f"🔍 Analisis Mendalam: {sel_ticker['Ticker']}")
@@ -253,10 +283,8 @@ if login():
                     increasing_fillcolor='#22c55e', decreasing_fillcolor='#ef4444'
                 )])
                 
-                # Plot MA50
                 fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['MA50'], line=dict(color='#fbbf24', width=1.5), name="MA50 Tren"))
                 
-                # Visualisasi Demand Zone (POI)
                 if ob:
                     fig.add_hrect(
                         y0=ob['low'], y1=ob['high'], 
@@ -265,20 +293,18 @@ if login():
                         annotation_text="POI/Demand", annotation_position="top left"
                     )
                 
-                # Visualisasi Setup Garis
                 if setup:
                     fig.add_hline(y=setup['Entry'], line_color="white", line_width=1, annotation_text="ENTRY")
                     fig.add_hline(y=setup['SL'], line_color="#ef4444", line_dash="dot", annotation_text="STOP LOSS")
                     fig.add_hline(y=setup['TP'], line_color="#22c55e", line_dash="dot", annotation_text="TAKE PROFIT")
                 
-                # PENGATURAN TATA LETAK GELAP PEKAT
                 fig.update_layout(
                     template="plotly_dark", 
                     xaxis_rangeslider_visible=False, 
                     height=550, 
                     margin=dict(l=0,r=0,t=10,b=0),
-                    paper_bgcolor='#0f172a', # Warna latar belakang bodi
-                    plot_bgcolor='#0f172a',  # Warna area grafik
+                    paper_bgcolor='#0f172a',
+                    plot_bgcolor='#0f172a',
                     xaxis=dict(gridcolor='#1e293b', zeroline=False),
                     yaxis=dict(gridcolor='#1e293b', zeroline=False),
                     legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01)
@@ -286,7 +312,6 @@ if login():
                 st.plotly_chart(fig, use_container_width=True)
 
             with col_setup:
-                # Summary Box
                 st.markdown(f"""
                 <div class="detail-box">
                     <p class="metric-label">Analisis Tren</p>
@@ -301,10 +326,8 @@ if login():
                 
                 st.write("**Momentum RSI (14)**")
                 st.progress(min(max(sel_ticker['RSI']/100, 0.0), 1.0), text=f"RSI: {sel_ticker['RSI']}")
-                
-                if setup:
-                    st.success(f"Konfluensi Positif: Harga bertahan di atas MA50 dan zona Demand terdeteksi.")
-                else:
-                    st.warning("Ekspektasi: Tunggu harga mendekati zona Demand atau konfirmasi kenaikan volume.")
     else:
-        st.info("💡 Klik 'Jalankan Pemindaian' di sidebar untuk mulai menganalisis pasar berdasarkan Smart Money Concept.")
+        if 'results' in st.session_state:
+            st.warning("Tidak ada saham yang sesuai dengan filter Anda.")
+        else:
+            st.info("💡 Klik 'Jalankan Pemindaian' di sidebar untuk mulai menganalisis pasar.")
