@@ -275,4 +275,3 @@ if login():
 
     else:
         st.info("💡 Selamat datang! Gunakan sidebar untuk menganalisis ticker saham pilihan Anda berdasarkan Smart Money Concept.")
-
