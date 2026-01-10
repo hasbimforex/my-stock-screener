@@ -8,9 +8,9 @@ import json
 from datetime import datetime, timedelta, timezone
 
 # --- KONFIGURASI HALAMAN ---
-st.set_page_config(page_title="StockScreener Pro: Full Analysis", layout="wide")
+st.set_page_config(page_title="StockScreener Pro: SMC Entry Logic", layout="wide")
 
-# --- KREDENSIAL STATIS (5 USER) ---
+# --- KREDENSIAL STATIS ---
 USERS = {
     "admin": "admin123",
     "analis1": "saham2024",
@@ -19,7 +19,7 @@ USERS = {
     "investor2": "bluechip99"
 }
 
-# --- CSS Kustom untuk Tema Gelap dan UI Premium ---
+# --- CSS Kustom UI ---
 st.markdown("""
 <style>
     .stApp { background-color: #0f172a !important; }
@@ -36,17 +36,7 @@ st.markdown("""
         color: #ffffff !important;
         border: 1px solid #334155 !important;
     }
-    div[data-baseweb="select"] > div, [data-baseweb="popover"], [data-baseweb="menu"] {
-        background-color: #1e293b !important;
-        color: white !important;
-    }
-    [data-baseweb="menu"] li, [role="option"] {
-        background-color: #1e293b !important;
-        color: white !important;
-    }
-    [data-baseweb="menu"] li:hover { background-color: #3b82f6 !important; }
-    span[data-baseweb="tag"] { background-color: #2563eb !important; color: white !important; }
-    .stButton > button, .stForm submit {
+    .stButton > button {
         background-color: #2563eb !important;
         color: #ffffff !important;
         border-radius: 8px !important;
@@ -59,6 +49,8 @@ st.markdown("""
         border: 1px solid #475569;
         margin-bottom: 20px;
     }
+    .metric-label { color: #94a3b8; font-size: 12px; font-weight: bold; text-transform: uppercase; }
+    .metric-value { color: #ffffff; font-size: 20px; font-weight: bold; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -66,7 +58,6 @@ st.markdown("""
 def login():
     if 'logged_in' not in st.session_state:
         st.session_state['logged_in'] = False
-
     if not st.session_state['logged_in']:
         _, col2, _ = st.columns([1, 2, 1])
         with col2:
@@ -74,9 +65,7 @@ def login():
             with st.form("login_form"):
                 username = st.text_input("Username").strip()
                 password = st.text_input("Password", type="password")
-                submit_button = st.form_submit_button("Login")
-                
-                if submit_button:
+                if st.form_submit_button("Login"):
                     if username in USERS and USERS[username] == password:
                         st.session_state['logged_in'] = True
                         st.session_state['user'] = username
@@ -86,272 +75,204 @@ def login():
         return False
     return True
 
-# --- FUNGSI DATABASE LOKAL (Caching) ---
-def init_db():
-    conn = sqlite3.connect('stock_cache.db')
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS scan_results 
-                 (id INTEGER PRIMARY KEY, ticker TEXT, data TEXT, timestamp TEXT)''')
-    conn.commit()
-    conn.close()
+# --- LOGIKA TEKNIKAL & SMC ---
 
-def save_to_db(results, timestamp):
-    conn = sqlite3.connect('stock_cache.db')
-    c = conn.cursor()
-    c.execute("DELETE FROM scan_results")
-    for res in results:
-        clean_res = {k: v for k, v in res.items() if k != 'df'}
-        c.execute("INSERT INTO scan_results (ticker, data, timestamp) VALUES (?, ?, ?)",
-                  (res['Ticker'], json.dumps(clean_res), timestamp))
-    conn.commit()
-    conn.close()
-
-def load_from_db():
-    try:
-        conn = sqlite3.connect('stock_cache.db')
-        df_sql = pd.read_sql_query("SELECT * FROM scan_results", conn)
-        conn.close()
-        if df_sql.empty: return [], None
-        results = [json.loads(row['data']) for _, row in df_sql.iterrows()]
-        last_updated = df_sql['timestamp'].iloc[0]
-        return results, last_updated
-    except: return [], None
-
-# --- ANALISIS TEKNIKAL ---
 def calculate_rsi(data, window=14):
     delta = data.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
     rs = gain / loss.replace(0, np.nan)
-    rsi = 100 - (100 / (1 + rs))
-    return rsi.fillna(50)
+    return (100 - (100 / (1 + rs))).fillna(50)
 
 def detect_market_structure(df):
     df = df.copy()
     window = 5
     df['High_Swing'] = df['High'].rolling(window=window, center=True).apply(lambda x: x.max() == x[window//2])
-    df['Low_Swing'] = df['Low'].rolling(window=window, center=True).apply(lambda x: x.min() == x[window//2])
-    
     highs = df[df['High_Swing'] == 1]['High']
-    lows = df[df['Low_Swing'] == 1]['Low']
-    
     last_high = highs.iloc[-2] if len(highs) > 1 else None
-    last_low = lows.iloc[-2] if len(lows) > 1 else None
     current_close = df['Close'].iloc[-1]
     
-    if last_high and current_close > last_high: return "BOS Bullish"
-    elif last_low and current_close < last_low: return "BOS Bearish"
-    return "Sideways"
+    # Logic BOS: Harga menembus swing high sebelumnya
+    if last_high and current_close > last_high:
+        return "BOS Bullish (Trend Up)"
+    return "Neutral / Retracement"
 
 def find_order_blocks(df):
     obs = []
-    for i in range(1, len(df)-2):
-        if df['Close'].iloc[i] < df['Open'].iloc[i]:
-            if df['Close'].iloc[i+1] > df['Open'].iloc[i+1] and df['Close'].iloc[i+2] > df['Open'].iloc[i+2]:
-                if df['Close'].iloc[i+2] > df['High'].iloc[i]:
-                    obs.append({'type': 'Bullish OB', 'price': df['Low'].iloc[i]})
+    # Mencari Bullish Order Block (Zona Demand)
+    # Aturan: Candle bearish terakhir sebelum pergerakan impulsif naik yang memecah high sebelumnya
+    for i in range(1, len(df)-5):
+        if df['Close'].iloc[i] < df['Open'].iloc[i]: # Candle Bearish
+            # Cek apakah ada lonjakan harga setelahnya (3 candle berikutnya dominan naik)
+            if df['Close'].iloc[i+3] > df['High'].iloc[i] * 1.02:
+                obs.append({
+                    'type': 'Bullish OB (Demand)', 
+                    'low': df['Low'].iloc[i], 
+                    'high': df['High'].iloc[i],
+                    'index': df.index[i]
+                })
     return obs[-1] if obs else None
 
-def generate_dynamic_insight(data, ob):
-    insights = []
-    if data['Structure'] == "BOS Bullish":
-        insights.append("Struktur pasar mengonfirmasi tren naik (Break of Structure).")
-    elif data['Structure'] == "BOS Bearish":
-        insights.append("Hati-hati, terjadi penembusan struktur ke bawah (Bearish BOS).")
+def get_trading_setup(price, structure, ob):
+    """
+    Logic Entry Strategi:
+    1. Harus ada zona Demand (Order Block) yang valid.
+    2. Entry dihitung pada batas atas zona (OB High) jika harga mendekati.
+    3. RR dihitung minimal 1:2.
+    """
+    if not ob: return None
     
-    if data['Vol Ratio'] > 2.0:
-        insights.append(f"Volume melonjak {data['Vol Ratio']}x, indikasi kuat akumulasi Institusi.")
+    # Ideal Entry: Harga saat ini atau harga batas atas zona permintaan
+    # Jika harga saat ini sudah jauh di atas zona, kita sarankan "Buy on Retrace" di OB High
+    entry_price = ob['high']
+    if price < ob['high'] * 1.05: # Jika harga saat ini masih dalam jangkauan 5% dari zona
+        entry_price = price
+        
+    stop_loss = ob['low'] * 0.995 # SL di bawah zona Demand (0.5% buffer)
+    risk = entry_price - stop_loss
     
-    if ob:
-        insights.append(f"Harga tertahan di area Demand ({ob['type']}) pada level Rp{round(ob['price'])}.")
+    if risk <= 0: return None
     
-    if data['RSI'] < 35:
-        insights.append("RSI menunjukkan kondisi Jenuh Jual (Oversold), potensi rebound tinggi.")
-    elif data['RSI'] > 70:
-        insights.append("RSI memasuki area Jenuh Beli (Overbought), waspada koreksi harga.")
+    take_profit = entry_price + (risk * 2) # Target Profit RR 1:2
     
-    if data['Total Skor'] >= 75:
-        insights.append("Konfluensi sinyal sangat kuat (Skor > 75). Probabilitas sukses trade tinggi.")
-    
-    return " ".join(insights) if insights else "Kondisi pasar saat ini sedang konsolidasi tanpa sinyal dominan."
+    return {
+        "Type": "BUY / LONG",
+        "Status": "PO (Limit)" if price > ob['high'] * 1.02 else "Market Entry",
+        "Entry": entry_price,
+        "SL": stop_loss,
+        "TP": take_profit,
+        "RR": "1:2.0"
+    }
 
 def get_signals(ticker_symbol):
     try:
         ticker = yf.Ticker(ticker_symbol)
         df = ticker.history(period="120d")
         if df.empty or len(df) < 50: return None
-
-        df['MA20'] = df['Close'].rolling(window=20).mean()
-        df['MA50'] = df['Close'].rolling(window=50).mean()
-        df['RSI'] = calculate_rsi(df['Close'], 14)
+        df['RSI'] = calculate_rsi(df['Close'])
         df['Avg_Vol_5'] = df['Volume'].shift(1).rolling(window=5).mean()
-        
         last = df.iloc[-1]
         price = last['Close']
         vol_ratio = last['Volume'] / last['Avg_Vol_5'] if last['Avg_Vol_5'] > 0 else 0
+        struct = detect_market_structure(df)
         
         # Scoring Logic
-        vol_score = 45 if vol_ratio > 2.0 else (30 if vol_ratio > 1.5 else (10 if vol_ratio > 1.0 else 0))
-        ma50_score = 30 if price > last['MA50'] else 0
+        v_score = 45 if vol_ratio > 2.0 else (30 if vol_ratio > 1.5 else 10)
         rsi_score = 25 if last['RSI'] < 35 else (15 if last['RSI'] < 65 else 5)
         
         return {
-            "Ticker": str(ticker_symbol),
-            "Sektor": str(ticker.info.get('sector', 'Lainnya')),
+            "Ticker": ticker_symbol,
+            "Sektor": ticker.info.get('sector', 'Lainnya'),
             "Harga": int(round(price)),
-            "Chg %": float(round(((price - df.iloc[-2]['Close']) / df.iloc[-2]['Close']) * 100, 2)),
-            "Total Skor": int(vol_score + ma50_score + rsi_score),
-            "Vol Ratio": float(round(vol_ratio, 2)),
-            "RSI": float(round(last['RSI'], 1)),
-            "Structure": str(detect_market_structure(df)),
-            "MA20": "✅ Bullish" if price > last['MA20'] else "❌ Bearish",
-            "MA50": "⬆️ Above" if price > last['MA50'] else "⬇️ Below",
-            "ma20_raw": bool(price > last['MA20']),
+            "Chg %": round(((price - df.iloc[-2]['Close']) / df.iloc[-2]['Close']) * 100, 2),
+            "Total Skor": int(v_score + rsi_score + (30 if "Bullish" in struct else 0)),
+            "Vol Ratio": round(vol_ratio, 2),
+            "RSI": round(last['RSI'], 1),
+            "Structure": struct,
             "df": df
         }
-    except Exception as e:
-        return None
+    except: return None
 
-# --- MAIN APP LOGIC ---
+# --- MAIN APP ---
+
 if login():
-    init_db()
-    st.title("🖥️ StockScreener Pro: Full Market Analysis")
-
-    if 'raw_results' not in st.session_state:
-        cached_data, last_ts = load_from_db()
-        st.session_state['raw_results'] = cached_data
-        st.session_state['last_updated'] = last_ts
-
-    if 'selected_ticker' not in st.session_state:
-        st.session_state['selected_ticker'] = None
-
-    # Sidebar
+    st.title("🖥️ StockScreener Pro: SMC Entry Logic")
+    
     with st.sidebar:
-        st.markdown(f"Selamat datang, **{st.session_state['user']}**")
+        st.markdown(f"Aktif: **{st.session_state['user']}**")
         if st.button("Logout"):
             st.session_state['logged_in'] = False
             st.rerun()
-            
         st.divider()
-        st.header("1. Masukan Ticker")
-        default_t = "AALI, ABBA, ABDA, ABMM, ACES, ACST, ADES, ADHI, AISA, AKKU, AKPI, AKRA, AKSI, ALDO, ALKA, ALMI, ALTO, AMAG, AMFG, AMIN, AMRT, ANJT, ANTM, APEX, APIC, APII, APLI, APLN, ARGO, ARII, ARNA, ARTA, ARTI, ARTO, ASBI, ASDM, ASGR, ASII, ASJT, ASMI, ASRI, ASRM, ASSA, ATIC, AUTO, BABP, BACA, BAJA, BALI, BAPA, BATA, BAYU, BBCA, BBHI, BBKP, BBLD, BBMD, BBNI, BBRI, BBRM, BBTN, BBYB, BCAP, BCIC, BCIP, BDMN, BEKS, BEST, BFIN, BGTG, BHIT, BIKA, BIMA, BINA, BIPI, BIPP, BIRD, BISI, BJBR, BJTM, BKDP, BKSL, BKSW, BLTA, BLTZ, BMAS, BMRI, BMSR, BMTR, BNBA, BNBR, BNGA, BNII, BNLI, BOLT, BPFI, BPII, BRAM, BRMS, BRNA, BRPT, BSDE, BSIM, BSSR, BSWD, BTEK, BTEL, BTON, BTPN, BUDI, BUKK, BULL, BUMI, BUVA, BVIC, BWPT, BYAN, CANI, CASS, CEKA, CENT, CFIN, CINT, CITA, CLPI, CMNP, CMPP, CNKO, CNTX, COWL, CPIN, CPRO, CSAP, CTBN, CTRA, CTTH, DART, DEFI, DEWA, DGIK, DILD, DKFT, DLTA, DMAS, DNAR, DNET, DOID, DPNS, DSFI, DSNG, DSSA, DUTI, DVLA, DYAN, ECII, EKAD, ELSA, ELTY, EMDE, EMTK, ENRG, EPMT, ERAA, ERTX, ESSA, ESTI, ETWA, EXCL, FAST, FASW, FISH, FMII, FORU, FPNI, GAMA, GDST, GDYR, GEMA, GEMS, GGRM, GIAA, GJTL, GLOB, GMTD, GOLD, GOLL, GPRA, GSMF, GTBO, GWSA, GZCO, HADE, HDFA, HERO, HEXA, HITS, HMSP, HOME, HOTL, HRUM, IATA, IBFN, IBST, ICBP, ICON, IGAR, IIKP, IKAI, IKBI, IMAS, IMJS, IMPC, INAF, INAI, INCI, INCO, INDF, INDR, INDS, INDX, INDY, INKP, INPC, INPP, INRU, INTA, INTD, INTP, IPOL, ISAT, ISSP, ITMA, ITMG, JAWA, JECC, JIHD, JKON, JPFA, JRPT, JSMR, JSPT, JTPE, KAEF, KARW, KBLI, KBLM, KBLV, KBRI, KDSI, KIAS, KICI, KIJA, KKGI, KLBF, KOBX, KOIN, KONI, KOPI, KPIG, KRAS, KREN, LAPD, LCGP, LEAD, LINK, LION, LMAS, LMPI, LMSH, LPCK, LPGI, LPIN, LPKR, LPLI, LPPF, LPPS, LRNA, LSIP, LTLS, MAGP, MAIN, MAPI, MAYA, MBAP, MBSS, MBTO, MCOR, MDIA, MDKA, MDLN, MDRN, MEDC, MEGA, MERK, META, MFMI, MGNA, MICE, MIDI, MIKA, MIRA, MITI, MKPI, MLBI, MLIA, MLPL, MLPT, MMLP, MNCN, MPMX, MPPA, MRAT, MREI, MSKY, MTDL, MTFN, MTLA, MTSM, MYOH, MYOR, MYTX, NELY, NIKL, NIRO, NISP, NOBU, NRCA, OCAP, OKAS, OMRE, PADI, PALM, PANR, PANS, PBRX, PDES, PEGE, PGAS, PGLI, PICO, PJAA, PKPK, PLAS, PLIN, PNBN, PNBS, PNIN, PNLF, PNSE, POLY, POOL, PPRO, PSAB, PSDN, PSKT, PTBA, PTIS, PTPP, PTRO, PTSN, PTSP, PUDP, PWON, PYFA, RAJA, RALS, RANC, RBMS, RDTX, RELI, RICY, RIGS, RIMO, RODA, ROTI, RUIS, SAFE, SAME, SCCO, SCMA, SCPI, SDMU, SDPC, SDRA, SGRO, SHID, SIDO, SILO, SIMA, SIMP, SIPD, SKBM, SKLT, SKYB, SMAR, SMBR, SMCB, SMDM, SMDR, SMGR, SMMA, SMMT, SMRA, SMRU, SMSM, SOCI, SONA, SPMA, SQMI, SRAJ, SRIL, SRSN, SRTG, SSIA, SSMS, SSTM, STAR, STTP, SUGI, SULI, SUPR, TALF, TARA, TAXI, TBIG, TBLA, TBMS, TCID, TELE, TFCO, TGKA, TIFA, TINS, TIRA, TIRT, TKIM, TLKM, TMAS, TMPO, TOBA, TOTL, TOTO, TOWR, TPIA, TPMA, TRAM, TRIL, TRIM, TRIO, TRIS, TRST, TRUS, TSPC, ULTJ, UNIC, UNIT, UNSP, UNTR, UNVR, VICO, VINS, VIVA, VOKS, VRNA, WAPO, WEHA, WICO, WIIM, WIKA, WINS, WOMF, WSKT, WTON, YPAS, YULE, ZBRA, SHIP, CASA, DAYA, DPUM, IDPR, JGLE, KINO, MARI, MKNT, MTRA, OASA, POWR, INCF, WSBP, PBSA, PRDA, BOGA, BRIS, PORT, CARS, MINA, CLEO, TAMU, CSIC, TGRA, FIRE, TOPS, KMTR, ARMY, MAPB, WOOD, HRTA, MABA, HOKI, MPOW, MARK, NASA, MDKI, BELL, KIOS, GMFI, MTWI, ZINC, MCAS, PPRE, WEGE, PSSI, MORA, DWGL, PBID, JMAS, CAMP, IPCM, PCAR, LCKM, BOSS, HELI, JSKY, INPS, GHON, TDPM, DFAM, NICK, BTPS, SPTO, PRIM, HEAL, TRUK, PZZA, TUGU, MSIN, SWAT, TNCA, MAPA, TCPI, IPCC, RISE, BPTR, POLL, NFCX, MGRO, NUSA, FILM, ANDI, LAND, MOLI, PANI, DIGI, CITY, SAPX, SURE, HKMU, MPRO, DUCK, GOOD, SKRN, YELO, CAKK, SATU, SOSS, DEAL, POLA, DIVA, LUCK, URBN, SOTS, ZONE, PEHA, FOOD, BEEF, POLI, CLAY, NATO, JAYA, COCO, MTPS, CPRI, HRME, POSA, JAST, FITT, BOLA, CCSI, SFAN, POLU, KJEN, KAYU, ITIC, PAMG, IPTV, BLUE, ENVY, EAST, LIFE, FUJI, KOTA, INOV, ARKA, SMKL, HDIT, KEEN, BAPI, TFAS, GGRP, OPMS, NZIA, SLIS, PURE, IRRA, DMMX, SINI, WOWS, ESIP, TEBE, KEJU, PSGO, AGAR, IFSH, REAL, IFII, PMJS, UCID, GLVA, PGJO, AMAR, CSRA, INDO, AMOR, TRIN, DMND, PURA, PTPW, TAMA, IKAN, SAMF, SBAT, KBAG, CBMF, RONY, CSMI, BBSS, BHAT, CASH, TECH, EPAC, UANG, PGUN, SOFA, PPGL, TOYS, SGER, TRJA, PNGO, SCNP, BBSI, KMDS, PURI, SOHO, HOMI, ROCK, ENZO, PLAN, PTDU, ATAP, VICI, PMMP, BANK, WMUU, EDGE, UNIQ, BEBS, SNLK, ZYRX, LFLO, FIMP, TAPG, NPGF, LUCY, ADCP, HOPE, MGLV, TRUE, LABA, ARCI, IPAC, MASB, BMHS, FLMC, NICL, UVCR, BUKA, HAIS, OILS, GPSO, MCOL, RSGK, RUNS, SBMA, CMNT, GTSI, IDEA, KUAS, BOBA, MTEL, DEPO, BINO, CMRY, WGSH, TAYS, WMPP, RMKE, OBMD, AVIA, IPPE, NASI, BSML, DRMA, ADMR, SEMA, ASLC, NETV, BAUT, ENAK, NTBK, SMKM, STAA, NANO, BIKE, WIRG, SICO, GOTO, TLDN, MTMH, WINR, IBOS, OLIV, ASHA, SWID, TRGU, ARKO, CHEM, DEWI, AXIO, KRYA, HATM, RCCC, GULA, JARR, AMMS, RAFI, KKES, ELPI, EURO, KLIN, TOOL, BUAH, CRAB, MEDS, COAL, PRAY, CBUT, BELI, MKTR, OMED, BSBK, PDPP, KDTN, ZATA, NINE, MMIX, PADA, ISAP, VTNY, SOUL, ELIT, BEER, CBPE, SUNI, CBRE, WINE, BMBL, PEVE, LAJU, FWCT, NAYZ, IRSX, PACK, VAST, CHIP, HALO, KING, PGEO, FUTR, HILL, BDKR, PTMP, SAGE, TRON, CUAN, NSSS, GTRA, HAJJ, JATI, TYRE, MPXL, SMIL, KLAS, MAXI, VKTR, RELF, AMMN, CRSN, GRPM, WIDI, TGUK, INET, MAHA, RMKO, CNMA, FOLK, HBAT, GRIA, PPRI, ERAL, CYBR, MUTU, LMAX, HUMI, MSIE, RSCH, BABY, AEGS, IOTF, KOCI, PTPS, BREN, STRK, KOKA, LOPI, UDNG, RGAS, MSTI, IKPM, AYAM, SURI, ASLI, GRPH, SMGA, UNTD, TOSK, MPIX, ALII, MKAP, MEJA, LIVE, HYGN, BAIK, VISI, AREA, MHKI, ATLA, DATA, SOLA, BATR, SPRE, PART, GOLF, ISEA, BLESS, GUNA, LABS, DOSS, NEST, PTMR, VERN, DAAZ, BOAT, NAIK, AADI, MDIY, KSIX, RATU, YOII, HGII, BRRC, DGWG, CBDK, OBAT, MINES, ASPR, PSAT, COIN, CDIA, BLOG, MERI, CHEK, PMUI, EMAS, PJHB, RLCO, SUPA, KAQI, YUPI, FORE, MDLA, DKHH, AYLS, DADA, ASPI, ESTA, BESS, AMAN, CARE, PIPA, NCKL, MENN, AWAN, MBMA, RAAM, DOOH, CGAS, NICE, MSJA, SMLE, ACRO, MANG, WIFI, FAPA, DCII, KETR, DGNS, UFOE, ADMF, ADMG, ADRO, AGII, AGRO, AGRS, AHAP, AIMS"
-        input_tickers = st.text_area("Daftar Ticker:", default_t, height=100)
-        
-        if st.button("Tarik Data & Analisis Baru"):
-            st.session_state['selected_ticker'] = None
-            t_list = [t.strip().upper() + (".JK" if "." not in t else "") for t in input_tickers.split(",") if t.strip()]
-            with st.spinner("Mengambil data yFinance..."):
-                res = [get_signals(t) for t in t_list]
-                valid_res = [r for r in res if r]
-                st.session_state['raw_results'] = valid_res
-                # Set timezone ke WIB (UTC+7)
+        input_tickers = st.text_area("Masukan Ticker:", "BBCA, BBRI, TLKM, ASII, GOTO, BMRI, UNTR, ADRO", height=100)
+        if st.button("Mulai Scan Pasar"):
+            t_list = [t.strip().upper() + (".JK" if "." not in t else "") for t in input_tickers.split(",")]
+            with st.spinner("Mengidentifikasi zona Smart Money..."):
+                st.session_state['results'] = [r for r in [get_signals(t) for t in t_list] if r]
                 wib = timezone(timedelta(hours=7))
-                st.session_state['last_updated'] = datetime.now(wib).strftime("%Y-%m-%d %H:%M:%S")
-                save_to_db(valid_res, st.session_state['last_updated'])
+                st.session_state['ts'] = datetime.now(wib).strftime("%Y-%m-%d %H:%M:%S")
 
-        if st.session_state['raw_results']:
-            st.write("---")
-            st.header("2. Filter Dashboard")
-            df_all = pd.DataFrame(st.session_state['raw_results'])
-            f_sektor = st.multiselect("Filter Sektor:", sorted(df_all['Sektor'].unique()), default=df_all['Sektor'].unique())
-            f_min_score = st.slider("Skor Minimal:", 0, 100, 0)
-            f_ma20 = st.radio("Sinyal MA20:", ["Semua", "Hanya Bullish ✅", "Hanya Bearish ❌"])
-
-            filtered = df_all[
-                (df_all['Sektor'].isin(f_sektor)) & 
-                (df_all['Total Skor'] >= f_min_score)
-            ]
-            if f_ma20 == "Hanya Bullish ✅": filtered = filtered[filtered['ma20_raw'] == True]
-            if f_ma20 == "Hanya Bearish ❌": filtered = filtered[filtered['ma20_raw'] == False]
-        else:
-            filtered = pd.DataFrame()
-
-    # --- MAIN DISPLAY ---
-    if not filtered.empty:
-        st.caption(f"📅 Data Terakhir (WIB): {st.session_state['last_updated']}")
+    if 'results' in st.session_state:
+        df_res = pd.DataFrame(st.session_state['results'])
+        st.caption(f"📅 Sinkronisasi WIB: {st.session_state['ts']}")
         
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Avg Score", f"{filtered['Total Skor'].mean():.1f}")
-        m2.metric("Oversold", len(filtered[filtered['RSI'] < 35]))
-        m3.metric("Bullish MA50", len(filtered[filtered['MA50'] == '⬆️ Above']))
-        m4.metric("Vol Spike", len(filtered[filtered['Vol Ratio'] > 2.0]))
-
-        st.divider()
-        
-        df_show = filtered.copy()
-        if 'df' in df_show.columns: df_show = df_show.drop(columns=['df'])
-        df_show = df_show.drop(columns=['ma20_raw']).sort_values(by="Total Skor", ascending=False)
-        
-        # Tabel Interaktif
         event = st.dataframe(
-            df_show,
-            use_container_width=True,
-            hide_index=True,
-            on_select="rerun",
-            selection_mode="single-row",
-            column_config={
-                "Total Skor": st.column_config.ProgressColumn("Skor", min_value=0, max_value=100, format="%d"),
-                "Chg %": st.column_config.NumberColumn("Change", format="%.2f%%"),
-                "Vol Ratio": st.column_config.NumberColumn("Vol Ratio", format="%.2fx")
-            }
+            df_res.drop(columns=['df']).sort_values(by="Total Skor", ascending=False),
+            use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row",
+            column_config={"Total Skor": st.column_config.ProgressColumn("Skor", min_value=0, max_value=100)}
         )
 
         if event.selection.rows:
-            sel_idx = event.selection.rows[0]
-            st.session_state['selected_ticker'] = df_show.iloc[sel_idx]['Ticker']
-
-        if st.session_state['selected_ticker']:
+            sel_ticker = df_res.iloc[event.selection.rows[0]]
             st.divider()
-            st.header(f"🔍 Detail Analisis: {st.session_state['selected_ticker']}")
             
-            ticker_data = next(i for i in st.session_state['raw_results'] if i["Ticker"] == st.session_state['selected_ticker'])
-            df_chart = ticker_data.get('df')
+            df_chart = sel_ticker['df']
+            ob = find_order_blocks(df_chart)
+            setup = get_trading_setup(sel_ticker['Harga'], sel_ticker['Structure'], ob)
             
-            # Re-fetch data chart jika tidak ada di cache (karena df tidak disimpan di sqlite)
-            if df_chart is None:
-                ticker_obj = yf.Ticker(st.session_state['selected_ticker'])
-                df_chart = ticker_obj.history(period="120d")
+            st.header(f"🔍 Strategi SMC: {sel_ticker['Ticker']}")
             
-            if df_chart is not None and not df_chart.empty:
-                df_chart['MA50'] = df_chart['Close'].rolling(window=50).mean()
-                c_left, c_right = st.columns([2, 1])
+            col_chart, col_setup = st.columns([2, 1])
+            
+            with col_chart:
+                fig = go.Figure(data=[go.Candlestick(
+                    x=df_chart.index, open=df_chart['Open'], high=df_chart['High'],
+                    low=df_chart['Low'], close=df_chart['Close'], name="Price"
+                )])
                 
-                with c_left:
-                    fig = go.Figure(data=[go.Candlestick(
-                        x=df_chart.index, open=df_chart['Open'], 
-                        high=df_chart['High'], low=df_chart['Low'], 
-                        close=df_chart['Close'], name="Price"
-                    )])
-                    fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['MA50'], line=dict(color='#fbbf24', width=2), name="MA50"))
-                    
-                    ob = find_order_blocks(df_chart)
-                    if ob:
-                        fig.add_hline(y=ob['price'], line_dash="dash", line_color="#22d3ee", annotation_text="OB Zone")
-                    
-                    fig.update_layout(
-                        template="plotly_dark", xaxis_rangeslider_visible=False, height=500,
-                        margin=dict(l=0, r=0, t=20, b=0), paper_bgcolor='rgba(0,0,0,0)',
-                        plot_bgcolor='rgba(0,0,0,0)'
+                # Visualisasi POI (Point of Interest / Demand Zone)
+                if ob:
+                    fig.add_hrect(
+                        y0=ob['low'], y1=ob['high'], 
+                        fillcolor="rgba(34, 211, 238, 0.15)", 
+                        line_width=1, line_color="#22d3ee",
+                        annotation_text="POI / Demand Zone", annotation_position="top left"
                     )
-                    st.plotly_chart(fig, use_container_width=True)
                 
-                with c_right:
-                    dynamic_analysis = generate_dynamic_insight(ticker_data, ob)
+                # Visualisasi Setup Target
+                if setup:
+                    fig.add_hline(y=setup['Entry'], line_color="white", line_width=1, annotation_text="ENTRY")
+                    fig.add_hline(y=setup['SL'], line_color="#ef4444", line_dash="dot", annotation_text="STOP LOSS")
+                    fig.add_hline(y=setup['TP'], line_color="#22c55e", line_dash="dot", annotation_text="TARGET TP")
+                
+                fig.update_layout(template="plotly_dark", xaxis_rangeslider_visible=False, height=550, margin=dict(l=0,r=0,t=0,b=0))
+                st.plotly_chart(fig, use_container_width=True)
+
+            with col_setup:
+                if setup:
+                    st.markdown(f"### 🎯 Setup {setup['Status']}")
+                    
+                    # Dashboard Ringkasan Angka
                     st.markdown(f"""
-                    <div class="detail-box">
-                        <h4 style="margin-top:0;">Technical Summary</h4>
-                        <p>Structure: <b style='color:#34d399;'>{ticker_data['Structure']}</b></p>
-                        <p>RSI (14): <b>{ticker_data['RSI']}</b></p>
-                        <p>Analyst Score: <b>{ticker_data['Total Skor']}/100</b></p>
-                        <hr style="border-color:#475569;">
-                        <p style="color:#e2e8f0; font-weight: 600;">AI Insight:</p>
-                        <p style="font-size: 14px; line-height: 1.6;">{dynamic_analysis}</p>
+                    <div style="background-color: #1e293b; border-radius: 10px; padding: 20px; border: 1px solid #334155;">
+                        <div style="margin-bottom: 15px;">
+                            <p class="metric-label">Entry Level</p>
+                            <p class="metric-value">Rp {round(setup['Entry'])}</p>
+                        </div>
+                        <div style="margin-bottom: 15px;">
+                            <p class="metric-label">Stop Loss (Safety)</p>
+                            <p class="metric-value" style="color: #ef4444;">Rp {round(setup['SL'])}</p>
+                        </div>
+                        <div style="margin-bottom: 15px;">
+                            <p class="metric-label">Target Take Profit</p>
+                            <p class="metric-value" style="color: #22c55e;">Rp {round(setup['TP'])}</p>
+                        </div>
+                        <div style="padding-top: 10px; border-top: 1px solid #334155;">
+                            <p class="metric-label">Risk Reward Ratio</p>
+                            <p class="metric-value" style="color: #3b82f6;">{setup['RR']}</p>
+                        </div>
                     </div>
                     """, unsafe_allow_html=True)
-                    st.write("**Momentum Bar**")
-                    st.progress(min(max(ticker_data['RSI']/100, 0.0), 1.0))
+                    
+                    st.write("")
+                    st.info(f"**Logika Entri:** Sistem mendeteksi adanya zona akumulasi institusi (*Demand Zone*) di area Rp{round(ob['low'])} - Rp{round(ob['high'])}. Entri disarankan saat harga melakukan *re-test* ke area ini untuk memaksimalkan profil risiko.")
+                else:
+                    st.warning("⚠️ Menunggu Konfirmasi: Struktur pasar saat ini belum membentuk zona permintaan (*Demand*) yang cukup kuat untuk setup entri berisiko rendah.")
+                
+                st.divider()
+                st.write("**Momentum Indikator**")
+                st.progress(min(max(sel_ticker['RSI']/100, 0.0), 1.0), text=f"RSI: {sel_ticker['RSI']}")
+
     else:
-        if st.session_state['raw_results']:
-            st.warning("Tidak ada data yang cocok dengan filter.")
-        else:
-            st.info("💡 Masukkan ticker di sidebar dan klik 'Tarik Data' untuk memulai analisis.")
+        st.info("💡 Selamat datang! Gunakan sidebar untuk menganalisis ticker saham pilihan Anda berdasarkan Smart Money Concept.")
+
