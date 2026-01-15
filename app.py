@@ -57,6 +57,18 @@ st.markdown("""
         background-color: #3b82f6 !important;
     }
 
+    /* Download Button Specific */
+    .stDownloadButton > button {
+        background-color: #059669 !important;
+        color: #ffffff !important;
+        border-radius: 8px !important;
+        width: auto !important;
+        padding-left: 20px !important;
+        padding-right: 20px !important;
+        font-weight: bold;
+        border: none;
+    }
+
     /* Detail Box */
     .detail-box {
         background-color: #1e293b;
@@ -167,25 +179,39 @@ def get_signals(ticker_symbol):
         vol_ratio = last['Volume'] / last['Avg_Vol_5'] if last['Avg_Vol_5'] > 0 else 0
         struct = detect_market_structure(df)
         
+        # Indikator Bullish & Spike
+        is_bullish = price > last['MA50']
+        is_vol_spike = vol_ratio > 2.0
+        
         ma20_status = "✅ Bullish" if price > last['MA20'] else "❌ Bearish"
-        ma50_status = "⬆️ Atas" if price > last['MA50'] else "⬇️ Bawah"
+        ma50_status = "⬆️ Atas" if is_bullish else "⬇️ Bawah"
+        vol_status = "🔥 Spike" if is_vol_spike else "Normal"
+        
+        # Momentum Status
+        if last['RSI'] < 30: rsi_stat = "💎 Oversold"
+        elif last['RSI'] > 70: rsi_stat = "⚠️ Overbought"
+        else: rsi_stat = "Neutral"
         
         v_score = 40 if vol_ratio > 2.0 else (20 if vol_ratio > 1.5 else 5)
-        ma_score = 30 if price > last['MA50'] else 0
+        ma_score = 30 if is_bullish else 0
         rsi_score = 20 if last['RSI'] < 35 else (10 if last['RSI'] < 65 else 0)
         smc_score = 10 if struct == "BOS Bullish" else 0
         
         return {
             "Ticker": ticker_symbol,
+            "Nama": ticker.info.get('longName', ticker_symbol),
             "Sektor": ticker.info.get('sector', 'Lainnya'),
             "Harga": int(round(price)),
             "Chg %": round(((price - df.iloc[-2]['Close']) / df.iloc[-2]['Close']) * 100, 2),
             "Skor": int(v_score + ma_score + rsi_score + smc_score),
+            "Trend": "Bullish 🚀" if is_bullish else "Bearish 🔻",
+            "Vol Ratio": round(vol_ratio, 2),
+            "Vol Status": vol_status,
+            "RSI": round(last['RSI'], 1),
+            "Momentum": rsi_stat,
+            "Structure": struct,
             "MA20": ma20_status,
             "MA50": ma50_status,
-            "Vol Ratio": round(vol_ratio, 2),
-            "RSI": round(last['RSI'], 1),
-            "Structure": struct,
             "df": df
         }
     except: return None
@@ -213,7 +239,7 @@ if login():
                 wib = timezone(timedelta(hours=7))
                 st.session_state['ts'] = datetime.now(wib).strftime("%H:%M:%S WIB")
 
-        # --- FITUR FILTERING (DIKEMBALIKAN) ---
+        # --- FITUR FILTERING ---
         if 'results' in st.session_state and st.session_state['results']:
             st.divider()
             st.header("2. Filter Dashboard")
@@ -221,31 +247,42 @@ if login():
             
             f_sektor = st.multiselect("Filter Sektor:", sorted(df_full['Sektor'].unique()), default=df_full['Sektor'].unique())
             f_min_score = st.slider("Skor Minimal:", 0, 100, 0)
-            f_ma20 = st.radio("Sinyal MA20:", ["Semua", "Hanya Bullish ✅", "Hanya Bearish ❌"])
+            f_trend = st.multiselect("Filter Trend:", ["Bullish 🚀", "Bearish 🔻"], default=["Bullish 🚀", "Bearish 🔻"])
+            f_vol = st.radio("Volume Spike:", ["Semua", "Hanya Spike 🔥", "Normal"])
 
             # Aplikasi Filtering
             filtered = df_full[
                 (df_full['Sektor'].isin(f_sektor)) & 
-                (df_full['Skor'] >= f_min_score)
+                (df_full['Skor'] >= f_min_score) &
+                (df_full['Trend'].isin(f_trend))
             ]
-            if f_ma20 == "Hanya Bullish ✅":
-                filtered = filtered[filtered['MA20'] == "✅ Bullish"]
-            elif f_ma20 == "Hanya Bearish ❌":
-                filtered = filtered[filtered['MA20'] == "❌ Bearish"]
+            if f_vol == "Hanya Spike 🔥":
+                filtered = filtered[filtered['Vol Status'] == "🔥 Spike"]
+            elif f_vol == "Normal":
+                filtered = filtered[filtered['Vol Status'] == "Normal"]
         else:
             filtered = pd.DataFrame()
 
     if not filtered.empty:
         st.caption(f"📅 Terakhir Diperbarui: {st.session_state['ts']}")
         
-        # Metrik Ringkasan (Berdasarkan Data Terfilter)
+        # Metrik Ringkasan
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Avg Score", f"{filtered['Skor'].mean():.1f}")
         m2.metric("Oversold (RSI < 35)", len(filtered[filtered['RSI'] < 35]))
-        m3.metric("Bullish MA50", len(filtered[filtered['MA50'] == '⬆️ Atas']))
-        m4.metric("Vol Spike", len(filtered[filtered['Vol Ratio'] > 2.0]))
+        m3.metric("Trend Bullish 🚀", len(filtered[filtered['Trend'] == 'Bullish 🚀']))
+        m4.metric("Volume Spikes 🔥", len(filtered[filtered['Vol Status'] == '🔥 Spike']))
         
         st.divider()
+
+        # Tombol Unduh
+        csv = filtered.drop(columns=['df']).to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Unduh Seluruh Tabel (CSV)",
+            data=csv,
+            file_name=f"stock_scan_pro_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+            mime="text/csv",
+        )
 
         # Tabel Utama
         event = st.dataframe(
@@ -257,7 +294,8 @@ if login():
             column_config={
                 "Skor": st.column_config.ProgressColumn("Skor", min_value=0, max_value=100, format="%d"),
                 "Chg %": st.column_config.NumberColumn("Change", format="%.2f%%"),
-                "Vol Ratio": st.column_config.NumberColumn("Vol Ratio", format="%.2fx")
+                "Vol Ratio": st.column_config.NumberColumn("Vol Ratio", format="%.2fx"),
+                "RSI": st.column_config.NumberColumn("RSI", format="%.1f")
             }
         )
 
@@ -266,7 +304,7 @@ if login():
             sel_ticker = filtered.sort_values(by="Skor", ascending=False).iloc[sel_idx]
             
             st.divider()
-            st.header(f"🔍 Analisis Mendalam: {sel_ticker['Ticker']}")
+            st.header(f"🔍 Analisis Mendalam: {sel_ticker['Nama']} ({sel_ticker['Ticker']})")
             
             df_chart = sel_ticker['df']
             ob = find_order_blocks(df_chart)
@@ -314,18 +352,20 @@ if login():
             with col_setup:
                 st.markdown(f"""
                 <div class="detail-box">
-                    <p class="metric-label">Analisis Tren</p>
-                    <p>MA20: <b>{sel_ticker['MA20']}</b></p>
-                    <p>MA50: <b>{sel_ticker['MA50']} MA50</b></p>
-                    <p>Struktur: <b>{sel_ticker['Structure']}</b></p>
+                    <p class="metric-label">Status Teknikal</p>
+                    <p>Trend: <b>{sel_ticker['Trend']}</b></p>
+                    <p>Volume: <b>{sel_ticker['Vol Status']} ({sel_ticker['Vol Ratio']}x)</b></p>
+                    <p>Momentum: <b>{sel_ticker['Momentum']} (RSI: {sel_ticker['RSI']})</b></p>
                     <hr style="border-color:#475569;">
-                    <p class="metric-label">SMC Trading Setup (RR 1:2)</p>
+                    <p class="metric-label">Analisis Struktur (SMC)</p>
+                    <p>Struktur: <b>{sel_ticker['Structure']}</b></p>
+                    <p>MA20 Status: <b>{sel_ticker['MA20']}</b></p>
+                    <hr style="border-color:#475569;">
+                    <p class="metric-label">Trading Setup (RR 1:2)</p>
                     {f"<p>Entry: <b>{round(setup['Entry'])}</b></p><p>SL (Risk): <b style='color:#ef4444;'>{round(setup['SL'])}</b></p><p>TP (Target): <b style='color:#22c55e;'>{round(setup['TP'])}</b></p>" if setup else "<p><i>Menunggu harga retrace ke zona demand.</i></p>"}
                 </div>
                 """, unsafe_allow_html=True)
                 
-                st.write("**Momentum RSI (14)**")
-                st.progress(min(max(sel_ticker['RSI']/100, 0.0), 1.0), text=f"RSI: {sel_ticker['RSI']}")
     else:
         if 'results' in st.session_state:
             st.warning("Tidak ada saham yang sesuai dengan filter Anda.")
