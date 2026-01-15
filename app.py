@@ -169,15 +169,25 @@ def get_signals(t):
         last = df.iloc[-1]; price = last['Close']
         v_ratio = last['Volume'] / last['Avg_Vol_5'] if last['Avg_Vol_5'] > 0 else 0
         struct = detect_market_structure(df)
+        
+        # Perhitungan Jarak Entry SMC
+        ob = find_order_blocks(df)
+        setup = get_trading_setup(price, ob)
+        jarak_entry = None
+        if setup:
+            jarak_entry = round(((price - setup['Entry']) / setup['Entry']) * 100, 2)
+
         v_score = 40 if v_ratio > 2.0 else (20 if v_ratio > 1.5 else 5)
         ma_score = 30 if price > last['MA50'] else 0
         rsi_score = 20 if last['RSI'] < 35 else (10 if last['RSI'] < 65 else 0)
         smc_score = 10 if struct == "BOS Bullish" else 0
+        
         return {
             "Ticker": t, "Nama": ticker.info.get('longName', t),
             "Sektor": ticker.info.get('sector', 'Lainnya'), "Harga": int(round(price)),
             "Chg %": round(((price - df.iloc[-2]['Close']) / df.iloc[-2]['Close']) * 100, 2),
             "Skor": int(v_score + ma_score + rsi_score + smc_score),
+            "Jarak Entry (%)": jarak_entry,
             "Vol Ratio": round(v_ratio, 2), "RSI": round(last['RSI'], 1),
             "Structure": struct, "MA20": "Bullish ✅" if price > last['MA20'] else "Bearish ❌",
             "MA50": "Atas ⬆️" if price > last['MA50'] else "Bawah ⬇️", "df": df
@@ -193,7 +203,7 @@ if login():
         st.divider()
         st.header("1. Konfigurasi Scan")
         
-        default_tickers = "AALI, ABBA, ABDA, ABMM, ACES, ACST, ADES, ADHI, AISA, AKKU, AKPI, AKRA, AKSI, ALDO, ALKA, ALMI, ALTO, AMAG, AMFG, AMIN, AMRT, ANJT, ANTM, APEX, APIC, APII, APLI, APLN, ARGO, ARII, ARNA, ARTA, ARTI, ARTO, ASBI, ASDM, ASGR, ASII, ASJT, ASMI, ASRI, ASRM, ASSA, ATIC, AUTO, BABP, BACA, BAJA, BALI, BAPA, BATA, BAYU, BBCA, BBHI, BBKP, BBLD, BBMD, BBNI, BBRI, BBRM, BBTN, BBYB, BCAP, BCIC, BCIP, BDMN, BEKS, BEST, BFIN, BGTG, BHIT, BIKA, BIMA, BINA, BIPI, BIPP, BIRD, BISI, BJBR, BJTM, BKDP, BKSL, BKSW, BLTA, BLTZ, BMAS, BMRI, BMSR, BMTR, BNBA, BNBR, BNGA, BNII, BNLI, BOLT, BPFI, BPII, BRAM, BRMS, BRNA, BRPT, BSDE, BSIM, BSSR, BSWD, BTEK, BTEL, BTON, BTPN, BUDI, BUKK, BULL, BUMI, BUVA, BVIC, BWPT, BYAN, CANI, CASS, CEKA, CENT, CFIN, CINT, CITA, CLPI, CMNP, CMPP, CNKO, CNTX, COWL, CPIN, CPRO, CSAP, CTBN, CTRA, CTTH, DART, DEFI, DEWA, DGIK, DILD, DKFT, DLTA, DMAS, DNAR, DNET, DOID, DPNS, DSFI, DSNG, DSSA, DUTI, DVLA, DYAN, ECII, EKAD, ELSA, ELTY, EMDE, EMTK, ENRG, EPMT, ERAA, ERTX, ESSA, ESTI, ETWA, EXCL, FAST, FASW, FISH, FMII, FORU, FPNI, GAMA, GDST, GDYR, GEMA, GEMS, GGRM, GIAA, GJTL, GLOB, GMTD, GOLD, GOLL, GPRA, GSMF, GTBO, GWSA, GZCO, HADE, HDFA, HERO, HEXA, HITS, HMSP, HOME, HOTL, HRUM, IATA, IBFN, IBST, ICBP, ICON, IGAR, IIKP, IKAI, IKBI, IMAS, IMJS, IMPC, INAF, INAI, INCI, INCO, INDF, INDR, INDS, INDX, INDY, INKP, INPC, INPP, INRU, INTA, INTD, INTP, IPOL, ISAT, ISSP, ITMA, ITMG, JAWA, JECC, JIHD, JKON, JPFA, JRPT, JSMR, JSPT, JTPE, KAEF, KARW, KBLI, KBLM, KBLV, KBRI, KDSI, KIAS, KICI, KIJA, KKGI, KLBF, KOBX, KOIN, KONI, KOPI, KPIG, KRAS, KREN, LAPD, LCGP, LEAD, LINK, LION, LMAS, LMPI, LMSH, LPCK, LPGI, LPIN, LPKR, LPLI, LPPF, LPPS, LRNA, LSIP, LTLS, MAGP, MAIN, MAPI, MAYA, MBAP, MBSS, MBTO, MCOR, MDIA, MDKA, MDLN, MDRN, MEDC, MEGA, MERK, META, MFMI, MGNA, MICE, MIDI, MIKA, MIRA, MITI, MKPI, MLBI, MLIA, MLPL, MLPT, MMLP, MNCN, MPMX, MPPA, MRAT, MREI, MSKY, MTDL, MTFN, MTLA, MTSM, MYOH, MYOR, MYTX, NELY, NIKL, NIRO, NISP, NOBU, NRCA, OCAP, OKAS, OMRE, PADI, PALM, PANR, PANS, PBRX, PDES, PEGE, PGAS, PGLI, PICO, PJAA, PKPK, PLAS, PLIN, PNBN, PNBS, PNIN, PNLF, PNSE, POLY, POOL, PPRO, PSAB, PSDN, PSKT, PTBA, PTIS, PTPP, PTRO, PTSN, PTSP, PUDP, PWON, PYFA, RAJA, RALS, RANC, RBMS, RDTX, RELI, RICY, RIGS, RIMO, RODA, ROTI, RUIS, SAFE, SAME, SCCO, SCMA, SCPI, SDMU, SDPC, SDRA, SGRO, SHID, SIDO, SILO, SIMA, SIMP, SIPD, SKBM, SKLT, SKYB, SMAR, SMBR, SMCB, SMDM, SMDR, SMGR, SMMA, SMMT, SMRA, SMRU, SMSM, SOCI, SONA, SPMA, SQMI, SRAJ, SRIL, SRSN, SRTG, SSIA, SSMS, SSTM, STAR, STTP, SUGI, SULI, SUPR, TALF, TARA, TAXI, TBIG, TBLA, TBMS, TCID, TELE, TFCO, TGKA, TIFA, TINS, TIRA, TIRT, TKIM, TLKM, TMAS, TMPO, TOBA, TOTL, TOTO, TOWR, TPIA, TPMA, TRAM, TRIL, TRIM, TRIO, TRIS, TRST, TRUS, TSPC, ULTJ, UNIC, UNIT, UNSP, UNTR, UNVR, VICO, VINS, VIVA, VOKS, VRNA, WAPO, WEHA, WICO, WIIM, WIKA, WINS, WOMF, WSKT, WTON, YPAS, YULE, ZBRA, SHIP, CASA, DAYA, DPUM, IDPR, JGLE, KINO, MARI, MKNT, MTRA, OASA, POWR, INCF, WSBP, PBSA, PRDA, BOGA, BRIS, PORT, CARS, MINA, CLEO, TAMU, CSIC, TGRA, FIRE, TOPS, KMTR, ARMY, MAPB, WOOD, HRTA, MABA, HOKI, MPOW, MARK, NASA, MDKI, BELL, KIOS, GMFI, MTWI, ZINC, MCAS, PPRE, WEGE, PSSI, MORA, DWGL, PBID, JMAS, CAMP, IPCM, PCAR, LCKM, BOSS, HELI, JSKY, INPS, GHON, TDPM, DFAM, nICK, BTPS, SPTO, PRIM, HEAL, TRUK, PZZA, TUGU, MSIN, SWAT, TNCA, MAPA, TCPI, IPCC, RISE, BPTR, POLL, NFCX, MGRO, NUSA, FILM, ANDI, LAND, MOLI, PANI, DIGI, CITY, SAPX, SURE, HKMU, MPRO, DUCK, GOOD, SKRN, YELO, CAKK, SATU, SOSS, DEAL, POLA, DIVA, LUCK, URBN, SOTS, ZONE, PEHA, FOOD, BEEF, POLI, CLAY, NATO, JAYA, COCO, MTPS, CPRI, HRME, POSA, JAST, FITT, BOLA, CCSI, SFAN, POLU, KJEN, KAYU, ITIC, PAMG, IPTV, BLUE, ENVY, EAST, LIFE, FUJI, KOTA, INOV, ARKA, SMKL, HDIT, KEEN, BAPI, TFAS, GGRP, OPMS, NZIA, SLIS, PURE, IRRA, DMMX, SINI, WOWS, ESIP, TEBE, KEJU, PSGO, AGAR, IFSH, REAL, IFII, PMJS, UCID, GLVA, PGJO, AMAR, CSRA, INDO, AMOR, TRIN, DMND, PURA, PTPW, TAMA, IKAN, SAMF, SBAT, KBAG, CBMF, RONY, CSMI, BBSS, BHAT, CASH, TECH, EPAC, UANG, PGUN, SOFA, PPGL, TOYS, SGER, TRJA, PNGO, SCNP, BBSI, KMDS, PURI, SOHO, HOMI, ROCK, ENZO, PLAN, PTDU, ATAP, VICI, PMMP, BANK, WMUU, EDGE, UNIQ, BEBS, SNLK, ZYRX, LFLO, FIMP, TAPG, NPGF, LUCY, ADCP, HOPE, MGLV, TRUE, LABA, ARCI, IPAC, MASB, BMHS, FLMC, NICL, UVCR, BUKA, HAIS, OILS, GPSO, MCOL, RSGK, RUNS, SBMA, CMNT, GTSI, IDEA, KUAS, BOBA, MTEL, DEPO, BINO, CMRY, WGSH, TAYS, WMPP, RMKE, OBMD, AVIA, IPPE, NASI, BSML, DRMA, ADMR, SEMA, ASLC, NETV, BAUT, ENAK, NTBK, SMKM, STAA, NANO, BIKE, WIRG, SICO, GOTO, TLDN, MTMH, WINR, IBOS, OLIV, ASHA, SWID, TRGU, ARKO, CHEM, DEWI, AXIO, KRYA, HATM, RCCC, GULA, JARR, AMMS, RAFI, KKES, ELPI, EURO, KLIN, TOOL, BUAH, CRAB, MEDS, COAL, PRAY, CBUT, BELI, MKTR, OMED, BSBK, PDPP, KDTN, ZATA, NINE, MMIX, PADA, ISAP, VTNY, SOUL, ELIT, BEER, CBPE, SUNI, CBRE, WINE, BMBL, PEVE, LAJU, FWCT, NAYZ, IRSX, PACK, VAST, CHIP, HALO, KING, PGEO, FUTR, HILL, BDKR, PTMP, SAGE, TRON, CUAN, NSSS, GTRA, HAJJ, JATI, TYRE, MPXL, SMIL, KLAS, MAXI, VKTR, RELF, AMMN, CRSN, GRPM, WIDI, TGUK, INET, MAHA, RMKO, CNMA, FOLK, HBAT, GRIA, PPRI, ERAL, CYBR, MUTU, LMAX, HUMI, MSIE, RSCH, BABY, AEGS, IOTF, KOCI, PTPS, BREN, STRK, KOKA, LOPI, UDNG, RGAS, MSTI, IKPM, AYAM, SURI, ASLI, GRPH, SMGA, UNTD, TOSK, MPIX, ALII, MKAP, MEJA, LIVE, HYGN, BAIK, VISI, AREA, MHKI, ATLA, DATA, SOLA, BATR, SPRE, PART, GOLF, ISEA, BLESS, GUNA, LABS, DOSS, NEST, PTMR, VERN, DAAZ, BOAT, NAIK, AADI, MDIY, KSIX, RATU, YOII, HGII, BRRC, DGWG, CBDK, OBAT, MINES, ASPR, PSAT, COIN, CDIA, BLOG, MERI, CHEK, PMUI, EMAS, PJHB, RLCO, SUPA, KAQI, YUPI, FORE, MDLA, DKHH, AYLS, DADA, ASPI, ESTA, BESS, AMAN, CARE, PIPA, nCKL, MENN, AWAN, MBMA, RAAM, DOOH, CGAS, NICE, MSJA, SMLE, ACRO, MANG, WIFI, FAPA, DCII, KETR, DGNS, UFOE, ADMF, ADMG, ADRO, AGII, AGRO, AGRS, AHAP, AIMS"
+        default_tickers = "AALI, ABBA, ABDA, ABMM, ACES, ACST, ADES, ADHI, AISA, AKKU, AKPI, AKRA, AKSI, ALDO, ALKA, ALMI, ALTO, AMAG, AMFG, AMIN, AMRT, ANJT, ANTM, APEX, APIC, APII, APLI, APLN, ARGO, ARII, ARNA, ARTA, ARTI, ARTO, ASBI, ASDM, ASGR, ASII, ASJT, ASMI, ASRI, ASRM, ASSA, ATIC, AUTO, BABP, BACA, BAJA, BALI, BAPA, BATA, BAYU, BBCA, BBHI, BBKP, BBLD, BBMD, BBNI, BBRI, BBRM, BBTN, BBYB, BCAP, BCIC, BCIP, BDMN, BEKS, BEST, BFIN, BGTG, BHIT, BIKA, BIMA, BINA, BIPI, BIPP, BIRD, BISI, BJBR, BJTM, BKDP, BKSL, BKSW, BLTA, BLTZ, BMAS, BMRI, BMSR, BMTR, BNBA, BNBR, BNGA, BNII, BNLI, BOLT, BPFI, BPII, BRAM, BRMS, BRNA, BRPT, BSDE, BSIM, BSSR, BSWD, BTEK, BTEL, BTON, BTPN, BUDI, BUKK, BULL, BUMI, BUVA, BVIC, BWPT, BYAN, CANI, CASS, CEKA, CENT, CFIN, CINT, CITA, CLPI, CMNP, CMPP, CNKO, CNTX, COWL, CPIN, CPRO, CSAP, CTBN, CTRA, CTTH, DART, DEFI, DEWA, DGIK, DILD, DKFT, DLTA, DMAS, DNAR, DNET, DOID, DPNS, DSFI, DSNG, DSSA, DUTI, DVLA, DYAN, ECII, EKAD, ELSA, ELTY, EMDE, EMTK, ENRG, EPMT, ERAA, ERTX, ESSA, ESTI, ETWA, EXCL, FAST, FASW, FISH, FMII, FORU, FPNI, GAMA, GDST, GDYR, GEMA, GEMS, GGRM, GIAA, GJTL, GLOB, GMTD, GOLD, GOLL, GPRA, GSMF, GTBO, GWSA, GZCO, HADE, HDFA, HERO, HEXA, HITS, HMSP, HOME, HOTL, HRUM, IATA, IBFN, IBST, ICBP, ICON, IGAR, IIKP, IKAI, IKBI, IMAS, IMJS, IMPC, INAF, INAI, INCI, INCO, INDF, INDR, INDS, INDX, INDY, INKP, INPC, INPP, INRU, INTA, INTD, INTP, IPOL, ISAT, ISSP, ITMA, ITMG, JAWA, JECC, JIHD, JKON, JPFA, JRPT, JSMR, JSPT, JTPE, KAEF, KARW, KBLI, KBLM, KBLV, KBRI, KDSI, KIAS, KICI, KIJA, KKGI, KLBF, KOBX, KOIN, KONI, KOPI, KPIG, KRAS, KREN, LAPD, LCGP, LEAD, LINK, LION, LMAS, LMPI, LMSH, LPCK, LPGI, LPIN, LPKR, LPLI, LPPF, LPPS, LRNA, LSIP, LTLS, MAGP, MAIN, MAPI, MAYA, MBAP, MBSS, MBTO, MCOR, MDIA, MDKA, MDLN, MDRN, MEDC, MEGA, MERK, META, MFMI, MGNA, MICE, MIDI, MIKA, MIRA, MITI, MKPI, MLBI, MLIA, MLPL, MLPT, MMLP, MNCN, MPMX, MPPA, MRAT, MREI, MSKY, MTDL, MTFN, MTLA, MTSM, MYOH, MYOR, MYTX, NELY, NIKL, NIRO, NISP, NOBU, NRCA, OCAP, OKAS, OMRE, PADI, PALM, PANR, PANS, PBRX, PDES, PEGE, PGAS, PGLI, PICO, PJAA, PKPK, PLAS, PLIN, PNBN, PNBS, PNIN, PNLF, PNSE, POLY, POOL, PPRO, PSAB, PSDN, PSKT, PTBA, PTIS, PTPP, PTRO, PTSN, PTSP, PUDP, PWON, PYFA, RAJA, RALS, RANC, RBMS, RDTX, RELI, RICY, RIGS, RIMO, RODA, ROTI, RUIS, SAFE, SAME, SCCO, SCMA, SCPI, SDMU, SDPC, SDRA, SGRO, SHID, SIDO, SILO, SIMA, SIMP, SIPD, SKBM, SKLT, SKYB, SMAR, SMBR, SMCB, SMDM, SMDR, SMGR, SMMA, SMMT, SMRA, SMRU, SMSM, SOCI, SONA, SPMA, SQMI, SRAJ, SRIL, SRSN, SRTG, SSIA, SSMS, SSTM, STAR, STTP, SUGI, SULI, SUPR, TALF, TARA, TAXI, TBIG, TBLA, TBMS, TCID, TELE, TFCO, TGKA, TIFA, TINS, TIRA, TIRT, TKIM, TLKM, TMAS, TMPO, TOBA, TOTL, TOTO, TOWR, TPIA, TPMA, TRAM, TRIL, TRIM, TRIO, TRIS, TRST, TRUS, TSPC, ULTJ, UNIC, UNIT, UNSP, UNTR, UNVR, VICO, VINS, VIVA, VOKS, VRNA, WAPO, WEHA, WICO, WIIM, WIKA, WINS, WOMF, WSKT, WTON, YPAS, YULE, ZBRA, SHIP, CASA, DAYA, DPUM, IDPR, JGLE, KINO, MARI, MKNT, MTRA, OASA, POWR, INCF, WSBP, PBSA, PRDA, BOGA, BRIS, PORT, CARS, MINA, CLEO, TAMU, CSIC, TGRA, FIRE, TOPS, KMTR, ARMY, MAPB, WOOD, HRTA, MABA, HOKI, MPOW, MARK, NASA, MDKI, BELL, KIOS, GMFI, MTWI, ZINC, MCAS, PPRE, WEGE, PSSI, MORA, DWGL, PBID, JMAS, CAMP, IPCM, PCAR, LCKM, BOSS, HELI, JSKY, INPS, GHON, TDPM, DFAM, nICK, BTPS, SPTO, PRIM, HEAL, TRUK, PZZA, TUGU, MSIN, SWAT, TNCA, MAPA, TCPI, IPCC, RISE, BPTR, POLL, NFCX, MGRO, nUSA, FILM, ANDI, LAND, MOLI, PANI, DIGI, CITY, SAPX, SURE, HKMU, MPRO, DUCK, GOOD, SKRN, YELO, CAKK, SATU, SOSS, DEAL, POLA, DIVA, LUCK, URBN, SOTS, ZONE, PEHA, FOOD, BEEF, POLI, CLAY, NATO, JAYA, COCO, MTPS, CPRI, HRME, POSA, JAST, FITT, BOLA, CCSI, SFAN, POLU, KJEN, KAYU, ITIC, PAMG, IPTV, BLUE, ENVY, EAST, LIFE, FUJI, KOTA, INOV, ARKA, SMKL, HDIT, KEEN, BAPI, TFAS, GGRP, OPMS, NZIA, SLIS, PURE, IRRA, DMMX, SINI, WOWS, ESIP, TEBE, KEJU, PSGO, AGAR, IFSH, REAL, IFII, PMJS, UCID, GLVA, PGJO, AMAR, CSRA, INDO, AMOR, TRIN, DMND, PURA, PTPW, TAMA, IKAN, SAMF, SBAT, KBAG, CBMF, RONY, CSMI, BBSS, BHAT, CASH, TECH, EPAC, UANG, PGUN, SOFA, PPGL, TOYS, SGER, TRJA, PNGO, SCNP, BBSI, KMDS, PURI, SOHO, HOMI, ROCK, ENZO, PLAN, PTDU, ATAP, VICI, PMMP, BANK, WMUU, EDGE, UNIQ, BEBS, SNLK, ZYRX, LFLO, FIMP, TAPG, NPGF, LUCY, ADCP, HOPE, MGLV, TRUE, LABA, ARCI, IPAC, MASB, BMHS, FLMC, NICL, UVCR, BUKA, HAIS, OILS, GPSO, MCOL, RSGK, RUNS, SBMA, CMNT, GTSI, IDEA, KUAS, BOBA, MTEL, DEPO, BINO, CMRY, WGSH, TAYS, WMPP, RMKE, OBMD, AVIA, IPPE, NASI, BSML, DRMA, ADMR, SEMA, ASLC, NETV, BAUT, ENAK, NTBK, SMKM, STAA, NANO, BIKE, WIRG, SICO, GOTO, TLDN, MTMH, WINR, IBOS, OLIV, ASHA, SWID, TRGU, ARKO, CHEM, DEWI, AXIO, KRYA, HATM, RCCC, GULA, JARR, AMMS, RAFI, KKES, ELPI, EURO, KLIN, TOOL, BUAH, CRAB, MEDS, COAL, PRAY, CBUT, BELI, MKTR, OMED, BSBK, PDPP, KDTN, ZATA, nINE, MMIX, PADA, ISAP, VTNY, SOUL, ELIT, BEER, CBPE, SUNI, CBRE, WINE, BMBL, PEVE, LAJU, FWCT, NAYZ, IRSX, PACK, VAST, CHIP, HALO, KING, PGEO, FUTR, HILL, BDKR, PTMP, SAGE, TRON, CUAN, nSSS, GTRA, HAJJ, JATI, TYRE, MPXL, SMIL, KLAS, MAXI, VKTR, RELF, AMMN, CRSN, GRPM, WIDI, TGUK, INET, MAHA, RMKO, CNMA, FOLK, HBAT, GRIA, PPRI, ERAL, CYBR, MUTU, LMAX, HUMI, MSIE, RSCH, BABY, AEGS, IOTF, KOCI, PTPS, BREN, STRK, KOKA, LOPI, UDNG, RGAS, MSTI, IKPM, AYAM, SURI, ASLI, GRPH, SMGA, UNTD, TOSK, MPIX, ALII, MKAP, MEJA, LIVE, HYGN, BAIK, VISI, AREA, MHKI, ATLA, DATA, SOLA, BATR, SPRE, PART, GOLF, ISEA, BLESS, GUNA, LABS, DOSS, NEST, PTMR, VERN, DAAZ, BOAT, nAIK, AADI, MDIY, KSIX, RATU, YOII, HGII, BRRC, DGWG, CBDK, OBAT, MINES, ASPR, PSAT, COIN, CDIA, BLOG, MERI, CHEK, PMUI, EMAS, PJHB, RLCO, SUPA, KAQI, YUPI, FORE, MDLA, DKHH, AYLS, DADA, ASPI, ESTA, BESS, AMAN, CARE, PIPA, nCKL, MENN, AWAN, MBMA, RAAM, DOOH, CGAS, NICE, MSJA, SMLE, ACRO, MANG, WIFI, FAPA, DCII, KETR, DGNS, UFOE, ADMF, ADMG, ADRO, AGII, AGRO, AGRS, AHAP, AIMS"
         input_t = st.text_area("Daftar Ticker (BEI):", default_tickers, height=120)
         
         if st.button("Jalankan Pemindaian"):
@@ -229,38 +239,65 @@ if login():
             csv = filtered.drop(columns=['df', 'Nama']).to_csv(index=False).encode('utf-8')
             st.download_button("📥 Unduh Tabel (CSV)", data=csv, file_name=f"scan_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv")
         with col_btn2:
-            if st.button("🤖 Analisis dengan Gemini AI (Seluruh Pasar)"):
-                batch_size = 20; all_nominations = []
-                data_only = filtered.drop(columns=['df'])
-                total_batches = (len(data_only) // batch_size) + (1 if len(data_only) % batch_size != 0 else 0)
+            if st.button("🤖 Analisis Gemini (Golden Criteria Only)"):
+                # --- PRE-FILTERING GOLDEN CRITERIA ---
+                golden_picks = filtered[
+                    (filtered['Structure'] == "BOS Bullish") & 
+                    (filtered['MA50'] == "Atas ⬆️") & 
+                    (filtered['RSI'] > 50) & (filtered['RSI'] < 90) & 
+                    (filtered['Vol Ratio'] > 2.0)
+                ]
                 
-                prog_ai = st.progress(0); status_ai = st.empty()
-                
-                # Tahap 1: Analisis per Batch
-                for i in range(0, len(data_only), batch_size):
-                    batch_idx = (i // batch_size) + 1
-                    status_ai.text(f"Menganalisis Batch {batch_idx}/{total_batches}...")
-                    chunk = data_only.iloc[i:i+batch_size].to_string()
+                if golden_picks.empty:
+                    st.warning("Tidak ada saham yang memenuhi semua Golden Criteria (BOS Bullish + MA50 + RSI 50-90 + Vol Spike). AI tidak dijalankan.")
+                else:
+                    batch_size = 20; all_nominations = []
+                    data_to_send = golden_picks.drop(columns=['df'])
+                    total_batches = (len(data_to_send) // batch_size) + (1 if len(data_to_send) % batch_size != 0 else 0)
+                    prog_ai = st.progress(0); status_ai = st.empty()
                     
-                    sys_inst = "Anda adalah asisten analis saham. Tugas Anda adalah membedah daftar 20 saham dan mencalonkan 2-3 saham terbaik dari grup ini berdasarkan metrik teknikal (SMC, Volume, RSI). Sebutkan Ticker dan alasan singkat."
-                    nominasi = call_gemini_ai(f"Analisis batch ini:\n{chunk}", sys_inst)
-                    if nominasi: all_nominations.append(nominasi)
-                    prog_ai.progress(batch_idx / (total_batches + 1))
-                
-                # Tahap 2: Final Analysis dari seluruh Nominasi
-                status_ai.text("Menyusun 5 Final Top Picks...")
-                final_prompt = "Berikut adalah daftar calon saham terbaik dari seluruh pasar:\n\n" + "\n---\n".join(all_nominations)
-                final_sys = "Anda adalah Senior Analyst. Dari daftar calon terbaik yang diberikan, pilih 5 saham 'Final Top Picks' yang paling layak beli. Gunakan format: 1. Nama & Ticker (Emoji), 2. Alasan Strategis, 3. Analisa Teknikal, 4. Strategi (Entry, TP, SL)."
-                
-                st.session_state['ai_analysis'] = call_gemini_ai(final_prompt, final_sys)
-                prog_ai.progress(1.0); status_ai.text("Analisis Selesai!")
+                    for i in range(0, len(data_to_send), batch_size):
+                        batch_idx = (i // batch_size) + 1
+                        status_ai.text(f"Menganalisis Golden Batch {batch_idx}/{total_batches}...")
+                        chunk = data_to_send.iloc[i:i+batch_size].to_string()
+                        sys_inst = "Anda adalah Senior Technical Analyst. Anda menerima daftar saham 'Golden Setup'. Calonkan saham terbaik dan berikan alasan tajam."
+                        nominasi = call_gemini_ai(f"Analisis batch layak ini:\n{chunk}", sys_inst)
+                        if nominasi: all_nominations.append(nominasi)
+                        prog_ai.progress(batch_idx / (total_batches + 1))
+                    
+                    status_ai.text("Menentukan 5 Final Top Picks...")
+                    final_prompt = "Berikut adalah daftar nominasi radar 'Golden Setup':\n\n" + "\n---\n".join(all_nominations)
+                    final_sys = "Pilih 5 saham 'Final Top Picks'. Format: 1. Nama & Ticker (Emoji), 2. Alasan Strategis, 3. Analisa Teknis, 4. Strategi (Entry, TP, SL)."
+                    st.session_state['ai_analysis'] = call_gemini_ai(final_prompt, final_sys)
+                    prog_ai.progress(1.0); status_ai.text("Analisis Selesai!")
 
         if 'ai_analysis' in st.session_state:
             st.markdown(f'<div class="ai-analysis-box">{st.session_state["ai_analysis"]}</div>', unsafe_allow_html=True)
             if st.button("Tutup Analisis AI"): del st.session_state['ai_analysis']; st.rerun()
 
         st.divider()
-        event = st.dataframe(filtered.drop(columns=['df', 'Nama']).sort_values(by="Skor", ascending=False), use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row", column_config={"Skor": st.column_config.ProgressColumn("Skor", min_value=0, max_value=100, format="%d"), "Chg %": st.column_config.NumberColumn("Change", format="%.2f%%"), "Vol Ratio": st.column_config.NumberColumn("Vol Ratio", format="%.2fx")})
+        
+        # Penyiapan Dataframe dengan Styling Warna Hijau untuk Jarak Entry <= 2%
+        def highlight_near_entry(val):
+            if val is not None and val <= 2.0:
+                return 'background-color: #064e3b; color: #34d399; font-weight: bold;'
+            return ''
+
+        styled_df = filtered.drop(columns=['df', 'Nama']).sort_values(by="Skor", ascending=False).style.applymap(
+            highlight_near_entry, subset=['Jarak Entry (%)']
+        )
+
+        event = st.dataframe(
+            styled_df,
+            use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row",
+            column_config={
+                "Skor": st.column_config.ProgressColumn("Skor", min_value=0, max_value=100, format="%d"),
+                "Chg %": st.column_config.NumberColumn("Change", format="%.2f%%"),
+                "Vol Ratio": st.column_config.NumberColumn("Vol Ratio", format="%.2fx"),
+                "Jarak Entry (%)": st.column_config.NumberColumn("Dist Entry", format="%.2f%%")
+            }
+        )
+
         if event.selection.rows:
             sel_ticker = filtered.sort_values(by="Skor", ascending=False).iloc[event.selection.rows[0]]
             st.divider(); st.header(f"🔍 Analisis Mendalam: {sel_ticker['Nama']} ({sel_ticker['Ticker']})")
@@ -276,5 +313,15 @@ if login():
                     fig.add_hline(y=setup['TP'], line_color="#22c55e", line_dash="dot", annotation_text="TP")
                 fig.update_layout(template="plotly_dark", xaxis_rangeslider_visible=False, height=550, margin=dict(l=0,r=0,t=10,b=0)); st.plotly_chart(fig, use_container_width=True)
             with col_setup:
-                st.markdown(f"""<div class="detail-box"><p class="metric-label">Status Teknikal</p><p>MA50 Tren: <b>{sel_ticker['MA50']}</b></p><p>Volume: <b>Ratio {sel_ticker['Vol Ratio']}x</b></p><p>Momentum: <b>RSI {sel_ticker['RSI']}</b></p><hr style="border-color:#475569;"><p class="metric-label">Struktur (SMC)</p><p>Struktur: <b>{sel_ticker['Structure']}</b></p><p>MA20 Status: <b>{sel_ticker['MA20']}</b></p><hr style="border-color:#475569;"><p class="metric-label">Trading Setup (RR 1:2)</p>""" + (f"<p>Entry: <b>{round(setup['Entry'])}</b></p><p>SL: <b style='color:#ef4444;'>{round(setup['SL'])}</b></p><p>TP: <b style='color:#22c55e;'>{round(setup['TP'])}</b></p>" if setup else "<p><i>Menunggu retrace...</i></p>") + "</div>", unsafe_allow_html=True)
+                st.markdown(f"""<div class="detail-box">
+                    <p class="metric-label">Status Teknikal</p>
+                    <p>MA50 Tren: <b>{sel_ticker['MA50']}</b></p>
+                    <p>Jarak Entry: <b>{sel_ticker['Jarak Entry (%)']}%</b></p>
+                    <p>Momentum: <b>RSI {sel_ticker['RSI']}</b></p>
+                    <hr style="border-color:#475569;">
+                    <p class="metric-label">Struktur (SMC)</p>
+                    <p>Struktur: <b>{sel_ticker['Structure']}</b></p>
+                    <p>MA20 Status: <b>{sel_ticker['MA20']}</b></p>
+                    <hr style="border-color:#475569;">
+                    <p class="metric-label">Trading Setup (RR 1:2)</p>""" + (f"<p>Entry: <b>{round(setup['Entry'])}</b></p><p>SL: <b style='color:#ef4444;'>{round(setup['SL'])}</b></p><p>TP: <b style='color:#22c55e;'>{round(setup['TP'])}</b></p>" if setup else "<p><i>Menunggu retrace...</i></p>") + "</div>", unsafe_allow_html=True)
     else: st.info("💡 Klik 'Jalankan Pemindaian' di sidebar untuk mulai.")
